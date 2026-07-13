@@ -276,4 +276,188 @@ export default {
     .toast {
       position: fixed;
       top: 20px;
-      right:
+      right: 20px;
+      background: #1a1a2e;
+      padding: 16px 24px;
+      border-radius: 12px;
+      border: 1px solid #2d2d44;
+      animation: slideIn 0.3s ease;
+    }
+    .toast.success { border-color: #22c55e; }
+    .toast.error { border-color: #ef4444; }
+    @keyframes slideIn {
+      from { transform: translateX(100px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⚡ ZLFinder</h1>
+      <span class="status">● Online</span>
+    </div>
+
+    <div class="url-box">
+      <code>wss://zlfinder-websocket.noahchico52.workers.dev/ws</code>
+    </div>
+
+    <div class="broadcast-box">
+      <h3>📢 Send Broadcast</h3>
+      <div class="broadcast-row">
+        <input type="password" id="passwordInput" placeholder="Enter password..." style="flex: 0.5; min-width: 100px;" />
+        <input type="text" id="broadcastInput" placeholder="Type your broadcast message..." />
+        <button id="broadcastBtn">📢 Send</button>
+      </div>
+      <div style="margin-top: 8px; font-size: 11px; color: #6b7280;">
+        🔒 Password required to send broadcasts
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-box">
+        <div class="num" id="playerCount">0</div>
+        <div class="label">👥 Players</div>
+      </div>
+      <div class="stat-box">
+        <div class="num" id="ownerStatus">-</div>
+        <div class="label">👑 Owner</div>
+      </div>
+    </div>
+
+    <div class="players">
+      <h3>👤 Connected Players <span class="refresh" onclick="fetchPlayers()">↻</span></h3>
+      <div id="playerList"><div class="empty">No players connected</div></div>
+    </div>
+
+    <div class="footer">🔌 Connect your Roblox script to the URL above</div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <script>
+    const PASSWORD = "MewVantaIsTheBest"; // CHANGE THIS TO YOUR PASSWORD
+    const passwordInput = document.getElementById('passwordInput');
+    const broadcastInput = document.getElementById('broadcastInput');
+    const broadcastBtn = document.getElementById('broadcastBtn');
+    const playerCount = document.getElementById('playerCount');
+    const ownerStatus = document.getElementById('ownerStatus');
+    const playerList = document.getElementById('playerList');
+
+    async function sendBroadcast() {
+      const password = passwordInput.value.trim();
+      const message = broadcastInput.value.trim();
+
+      if (!password) {
+        showToast('❌ Please enter the password!', 'error');
+        return;
+      }
+
+      if (!message) {
+        showToast('❌ Please enter a message!', 'error');
+        return;
+      }
+
+      broadcastBtn.disabled = true;
+      broadcastBtn.textContent = 'Sending...';
+
+      try {
+        const res = await fetch('/api/broadcast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: message,
+            password: password
+          })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          showToast('✅ ' + data.message, 'success');
+          broadcastInput.value = '';
+        } else {
+          showToast('❌ ' + (data.error || 'Failed'), 'error');
+        }
+      } catch (err) {
+        showToast('❌ Error: ' + err.message, 'error');
+      }
+
+      broadcastBtn.disabled = false;
+      broadcastBtn.textContent = '📢 Send';
+    }
+
+    async function fetchPlayers() {
+      try {
+        const res = await fetch('/api/players');
+        const data = await res.json();
+
+        playerCount.textContent = data.length;
+        const owner = data.find(p => p.isOwner);
+        ownerStatus.textContent = owner ? owner.name : 'None';
+        ownerStatus.style.color = owner ? '#fbbf24' : '#6b7280';
+
+        if (data.length === 0) {
+          playerList.innerHTML = '<div class="empty">No players connected</div>';
+          return;
+        }
+
+        playerList.innerHTML = data.map(p => \`
+          <div class="player-card \${p.isOwner ? 'owner' : ''}">
+            <div>
+              <span class="name">👤 \${p.name || 'Unknown'}</span>
+              \${p.isOwner ? '<span class="owner-badge">👑 OWNER</span>' : ''}
+              <span class="id">🆔 \${p.userId || 'Unknown'}</span>
+            </div>
+            <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
+          </div>
+        \`).join('');
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    }
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    broadcastBtn.addEventListener('click', sendBroadcast);
+    broadcastInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendBroadcast();
+    });
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendBroadcast();
+    });
+
+    fetchPlayers();
+    setInterval(fetchPlayers, 3000);
+  </script>
+</body>
+</html>`, {
+      headers: { 'Content-Type': 'text/html; charset=UTF-8' }
+    });
+  }
+};
+
+// ─── Helper: Get player list ───
+function getPlayerList() {
+  const list = [];
+  for (const [id, player] of players) {
+    list.push({
+      name: player.name,
+      userId: player.userId,
+      executor: player.executor,
+      isOwner: player.isOwner || false,
+      connectedAt: player.connectedAt
+    });
+  }
+  return list;
+}
