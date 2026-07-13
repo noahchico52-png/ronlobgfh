@@ -40,7 +40,7 @@ export default {
               executor: info.executor || 'Unknown',
               isOwner: isOwner,
               connectedAt: new Date().toISOString(),
-              ws: server // Store WebSocket reference!
+              ws: server
             });
 
             console.log(`👤 Player stored: ${playerName}`);
@@ -103,7 +103,6 @@ export default {
           });
         }
 
-        // ─── Find the player's WebSocket ───
         let targetId = null;
         let targetWs = null;
         let targetName = null;
@@ -127,7 +126,6 @@ export default {
           });
         }
 
-        // ─── Send KICK message to the player ───
         try {
           targetWs.send(JSON.stringify({
             type: 'kick',
@@ -140,7 +138,6 @@ export default {
           console.error('Failed to send kick:', err);
         }
 
-        // ─── Remove from list ───
         players.delete(targetId);
 
         return new Response(JSON.stringify({ 
