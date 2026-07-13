@@ -1,3 +1,15 @@
+const express = require('express');
+const { createServer } = require('http');
+const WebSocket = require('ws');
+
+const app = express();
+const server = createServer(app);
+const port = process.env.PORT || 10000;
+
+// WebSocket server on /ws path
+const wss = new WebSocket.Server({ server, path: '/ws' });
+
+// ─── HTTP ROUTE (Your HTML page) ───
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -19,6 +31,7 @@ app.get('/', (req, res) => {
                 h1 { color: #a78bfa; }
                 p { color: #9ca3af; }
                 .status { color: #22c55e; }
+                code { background: #1a1a2e; padding: 4px 8px; border-radius: 4px; }
             </style>
         </head>
         <body>
@@ -31,4 +44,36 @@ app.get('/', (req, res) => {
         </body>
         </html>
     `);
+});
+
+// ─── HEALTH CHECK (keeps Render happy) ───
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+// ─── WEBSOCKET LOGIC ───
+wss.on('connection', (ws) => {
+    console.log('✅ Client connected!');
+    
+    // Send welcome message
+    ws.send(JSON.stringify({
+        type: 'connected',
+        message: 'Connected to ZLFinder server!'
+    }));
+    
+    ws.on('message', (message) => {
+        console.log('📩 Received:', message.toString());
+        // Echo back
+        ws.send(message);
+    });
+    
+    ws.on('close', () => {
+        console.log('❌ Client disconnected');
+    });
+});
+
+// ─── START SERVER ───
+server.listen(port, () => {
+    console.log(`✅ Server running on port ${port}`);
+    console.log(`📍 WebSocket URL: wss://nlfinder.onrender.com/ws`);
 });
