@@ -1,577 +1,607 @@
-const express = require('express');
-const { createServer } = require('http');
-const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
+// server.js - Cloudflare Worker Server Control
 
-const app = express();
-const server = createServer(app);
-const port = process.env.PORT || 8080;
+const players = new Map();
+let ownerId = null;
 
-// ─── WebSocket Server ───
-const wss = new WebSocket.Server({ server, path: '/ws' });
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
 
-// ─── Config ───
-const PASSWORD = "MewVantaIsTheBest";
-const connectedPlayers = new Map();
-const playerData = new Map();
+    // ─── WEBSOCKET CONNECTION ───
+    if (url.pathname === '/ws') {
+      const upgrade = request.headers.get('Upgrade');
+      if (upgrade !== 'websocket') {
+        return new Response('Expected Upgrade: websocket', { status: 426 });
+      }
 
-// ─── Store server logs ───
-const logs = [];
+      const [client, server] = Object.values(new WebSocketPair());
+      server.accept();
 
-// ─── HTTP Routes ───
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Server Control</title>
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body {
-                    background: #0d0d1a;
-                    color: #e0e0e0;
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    min-height: 100vh;
-                    padding: 20px;
-                }
-                .container {
-                    background: #1a1a2e;
-                    padding: 30px;
-                    border-radius: 20px;
-                    max-width: 800px;
-                    width: 100%;
-                    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-                }
-                .header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    border-bottom: 1px solid #2d2d44;
-                    padding-bottom: 15px;
-                    margin-bottom: 20px;
-                }
-                h1 { color: #a78bfa; font-size: 28px; }
-                .status { background: #22c55e; color: #fff; padding: 4px 16px; border-radius: 20px; font-size: 14px; }
-                .stat-box {
-                    background: #0d0d1a;
-                    padding: 12px;
-                    border-radius: 10px;
-                    text-align: center;
-                    border: 1px solid #2d2d44;
-                    flex: 1;
-                }
-                .stat-box .num { font-size: 24px; font-weight: bold; color: #a78bfa; }
-                .stat-box .label { font-size: 12px; color: #6b7280; }
-                .stats { display: flex; gap: 20px; margin: 15px 0; }
-                .players-list { margin-top: 15px; max-height: 300px; overflow-y: auto; }
-                .player-card {
-                    background: #0d0d1a;
-                    padding: 10px 16px;
-                    border-radius: 8px;
-                    margin-bottom: 6px;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    border-left: 3px solid #4ade80;
-                }
-                .player-card.owner { border-left-color: #fbbf24; }
-                .player-card .name { color: #4ade80; font-weight: bold; }
-                .player-card .id { color: #818cf8; font-size: 12px; }
-                .player-card .executor { 
-                    background: #2d2d44; 
-                    padding: 2px 12px; 
-                    border-radius: 12px; 
-                    font-size: 11px; 
-                    color: #f472b6;
-                }
-                .player-card .kick-btn {
-                    background: #ef4444;
-                    color: #fff;
-                    border: none;
-                    padding: 4px 12px;
-                    border-radius: 6px;
-                    cursor: pointer;
-                    font-size: 11px;
-                }
-                .player-card .kick-btn:hover { opacity: 0.8; }
-                .empty { color: #6b7280; text-align: center; padding: 20px; }
-                .log-box {
-                    background: #0d0d1a;
-                    border-radius: 8px;
-                    padding: 10px;
-                    max-height: 150px;
-                    overflow-y: auto;
-                    margin-top: 15px;
-                    font-size: 12px;
-                    font-family: monospace;
-                }
-                .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
-                .log-entry .time { color: #6b7280; margin-right: 10px; }
-                .log-entry .msg { color: #e0e0e0; }
-                .log-entry .kick { color: #ef4444; }
-                .log-entry .join { color: #22c55e; }
-                .footer { margin-top: 15px; font-size: 12px; color: #4b5563; text-align: center; }
-                .refresh { cursor: pointer; color: #6b7280; font-size: 12px; float: right; }
-                .refresh:hover { color: #a78bfa; }
-                .cmd-box {
-                    margin-top: 15px;
-                    display: flex;
-                    gap: 10px;
-                }
-                .cmd-box input {
-                    flex: 1;
-                    padding: 10px 14px;
-                    border: 1px solid #2d2d44;
-                    border-radius: 8px;
-                    background: #0d0d1a;
-                    color: #fff;
-                    font-size: 14px;
-                }
-                .cmd-box input:focus { border-color: #a78bfa; outline: none; }
-                .cmd-box button {
-                    padding: 10px 24px;
-                    border: none;
-                    border-radius: 8px;
-                    background: #a78bfa;
-                    color: #0d0d1a;
-                    font-weight: bold;
-                    font-size: 14px;
-                    cursor: pointer;
-                }
-                .cmd-box button:hover { opacity: 0.8; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>⚡ Server Control</h1>
-                    <span class="status" id="status">● Online</span>
-                </div>
+      console.log('✅ Client connected!');
 
-                <div class="stats">
-                    <div class="stat-box">
-                        <div class="num" id="playerCount">0</div>
-                        <div class="label">👥 Players</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="num" id="ownerName">-</div>
-                        <div class="label">👑 Owner</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="num" id="logCount">0</div>
-                        <div class="label">📝 Logs</div>
-                    </div>
-                </div>
+      let playerId = null;
+      let playerName = 'Unknown';
+      let isOwner = false;
 
-                <div class="players-list">
-                    <h3 style="color: #9ca3af; margin-bottom: 10px;">👤 Connected Players <span class="refresh" onclick="fetchData()">↻</span></h3>
-                    <div id="playerList"><div class="empty">No players connected</div></div>
-                </div>
-
-                <div class="cmd-box">
-                    <input type="text" id="cmdInput" placeholder="Command: kick [player] or list" />
-                    <button id="cmdBtn">Send</button>
-                </div>
-
-                <div class="log-box" id="logBox">
-                    <div class="log-entry"><span class="time">[Server]</span><span class="msg">Server started</span></div>
-                </div>
-
-                <div class="footer">🔒 Password Protected: <span id="passwordDisplay">MewVantaIsTheBest</span></div>
-            </div>
-
-            <script>
-                async function fetchData() {
-                    try {
-                        const res = await fetch('/api/data');
-                        const data = await res.json();
-                        
-                        document.getElementById('playerCount').textContent = data.players.length;
-                        document.getElementById('ownerName').textContent = data.ownerName || 'None';
-                        document.getElementById('logCount').textContent = data.logs.length;
-                        
-                        const list = document.getElementById('playerList');
-                        if (data.players.length === 0) {
-                            list.innerHTML = '<div class="empty">No players connected</div>';
-                            return;
-                        }
-                        
-                        list.innerHTML = data.players.map(p => \`
-                            <div class="player-card \${p.isOwner ? 'owner' : ''}">
-                                <div>
-                                    <span class="name">👤 \${p.name}</span>
-                                    \${p.isOwner ? '<span style="color: #fbbf24; font-size: 12px;">👑 OWNER</span>' : ''}
-                                    <span class="id">🆔 \${p.userId}</span>
-                                    <span class="executor">⚡ \${p.executor}</span>
-                                </div>
-                                <button class="kick-btn" onclick="kickPlayer('\${p.name}')">Kick</button>
-                            </div>
-                        \`).join('');
-                        
-                        // Update logs
-                        const logBox = document.getElementById('logBox');
-                        logBox.innerHTML = data.logs.slice(-20).map(log => \`
-                            <div class="log-entry">
-                                <span class="time">[\${log.time}]</span>
-                                <span class="msg \${log.type}">\${log.message}</span>
-                            </div>
-                        \`).join('');
-                        logBox.scrollTop = logBox.scrollHeight;
-                        
-                    } catch (err) {
-                        console.error('Fetch error:', err);
-                    }
-                }
-
-                async function kickPlayer(name) {
-                    if (!confirm(\`Kick player: \${name}?\`)) return;
-                    try {
-                        const res = await fetch('/api/kick', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ playerName: name, password: prompt('Enter password:') })
-                        });
-                        const data = await res.json();
-                        alert(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'));
-                        fetchData();
-                    } catch (err) {
-                        alert('Error: ' + err.message);
-                    }
-                }
-
-                document.getElementById('cmdBtn').addEventListener('click', async () => {
-                    const input = document.getElementById('cmdInput');
-                    const text = input.value.trim();
-                    if (!text) return;
-                    
-                    const parts = text.split(' ');
-                    const cmd = parts[0].toLowerCase();
-                    
-                    if (cmd === 'kick' && parts[1]) {
-                        await kickPlayer(parts[1]);
-                    } else if (cmd === 'list') {
-                        await fetchData();
-                    } else {
-                        alert('Commands: kick [player], list');
-                    }
-                    input.value = '';
-                });
-
-                document.getElementById('cmdInput').addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') document.getElementById('cmdBtn').click();
-                });
-
-                fetchData();
-                setInterval(fetchData, 3000);
-            </script>
-        </body>
-        </html>
-    `);
-});
-
-// ─── API: Get data ───
-app.get('/api/data', (req, res) => {
-    const players = [];
-    for (const [id, data] of playerData) {
-        players.push({
-            name: data.name || 'Unknown',
-            userId: id,
-            executor: data.executor || 'Unknown',
-            isOwner: data.isOwner || false
-        });
-    }
-    
-    // Sort: owner first, then by name
-    players.sort((a, b) => {
-        if (a.isOwner) return -1;
-        if (b.isOwner) return 1;
-        return a.name.localeCompare(b.name);
-    });
-    
-    const owner = players.find(p => p.isOwner);
-    
-    res.json({
-        players: players,
-        ownerName: owner ? owner.name : null,
-        logs: logs.slice(-50)
-    });
-});
-
-// ─── API: Kick player ───
-app.post('/api/kick', (req, res) => {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
+      // ─── Handle messages ───
+      server.addEventListener('message', (event) => {
         try {
-            const data = JSON.parse(body);
-            const { playerName, password } = data;
-            
-            if (!password || password !== PASSWORD) {
-                return res.json({ success: false, message: 'Invalid password!' });
+          const data = JSON.parse(event.data);
+          console.log('📩 Received:', data.type);
+
+          // ─── PLAYER INFO ───
+          if (data.type === 'player_info') {
+            const info = data.data;
+            playerId = info.userId || crypto.randomUUID();
+            playerName = info.name || 'Unknown';
+            isOwner = info.isOwner || false;
+
+            players.set(playerId, {
+              name: playerName,
+              userId: playerId,
+              executor: info.executor || 'Unknown',
+              isOwner: isOwner,
+              connectedAt: new Date().toISOString()
+            });
+
+            if (isOwner) {
+              ownerId = playerId;
+              console.log(`👑 OWNER connected: ${playerName}`);
             }
-            
-            if (!playerName) {
-                return res.json({ success: false, message: 'Player name required!' });
-            }
-            
-            // Find player in connected clients
-            let targetWs = null;
-            let targetId = null;
-            for (const [id, ws] of connectedPlayers) {
-                const pData = playerData.get(id);
-                if (pData && pData.name === playerName) {
-                    targetWs = ws;
-                    targetId = id;
-                    break;
-                }
-            }
-            
-            if (!targetWs) {
-                return res.json({ success: false, message: `Player "${playerName}" not found!` });
-            }
-            
-            // Send kick message to client
-            targetWs.send(JSON.stringify({
-                type: 'kick',
-                data: {
-                    message: 'You have been kicked by the server owner!'
-                }
+
+            console.log(`👤 Player stored: ${playerName} (${playerId})`);
+            console.log(`📊 Total players: ${players.size}`);
+
+            // ─── Send confirmation ───
+            server.send(JSON.stringify({
+              type: 'player_info_received',
+              data: {
+                message: `Welcome ${playerName}!`,
+                players: getPlayerList(),
+                isOwner: isOwner,
+                ownerId: ownerId
+              }
             }));
-            
-            // Close connection after short delay
-            setTimeout(() => {
-                if (targetWs.readyState === WebSocket.OPEN) {
-                    targetWs.close();
-                }
-            }, 500);
-            
-            addLog(`👢 Kicked: ${playerName}`, 'kick');
-            
-            res.json({ success: true, message: `✅ Kicked: ${playerName}` });
-            
-        } catch (err) {
-            res.json({ success: false, message: 'Error: ' + err.message });
-        }
-    });
-});
 
-// ─── WebSocket Logic ───
-wss.on('connection', (ws) => {
-    const clientId = crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random();
-    connectedPlayers.set(clientId, ws);
-    
-    console.log(`✅ Client connected: ${clientId}`);
-    addLog(`👤 Client connected: ${clientId}`, 'join');
-    
-    let playerName = 'Unknown';
-    let isOwner = false;
-    
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            console.log('📩 Received:', data.type);
-            
-            if (data.type === 'player_info') {
-                const info = data.data;
-                playerName = info.name || 'Unknown';
-                isOwner = info.isOwner || false;
-                
-                playerData.set(clientId, {
-                    name: playerName,
-                    userId: info.userId || clientId,
-                    executor: info.executor || 'Unknown',
-                    isOwner: isOwner,
-                    connectedAt: new Date().toISOString()
-                });
-                
-                if (isOwner) {
-                    console.log(`👑 OWNER connected: ${playerName}`);
-                    addLog(`👑 Owner connected: ${playerName}`, 'join');
-                } else {
-                    addLog(`👤 Player joined: ${playerName}`, 'join');
-                }
-                
-                // Send confirmation
-                ws.send(JSON.stringify({
-                    type: 'player_info_received',
-                    data: {
-                        message: `Welcome ${playerName}!`,
-                        isOwner: isOwner
-                    }
-                }));
-                
-                broadcastUpdate();
-                return;
+            // ─── Broadcast update to all ───
+            broadcastToAll({
+              type: 'update',
+              data: {
+                players: getPlayerList(),
+                owner: isOwner ? playerName : null
+              }
+            }, server);
+
+            return;
+          }
+
+          // ─── KICK COMMAND ───
+          if (data.type === 'kick') {
+            if (!isOwner) {
+              server.send(JSON.stringify({
+                type: 'error',
+                data: { message: 'Only the owner can kick players!' }
+              }));
+              return;
             }
-            
-            // ─── Handle kick command from client ───
-            if (data.type === 'kick') {
-                if (!isOwner) {
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        data: { message: 'Only the owner can kick players!' }
-                    }));
-                    return;
-                }
-                
-                const targetName = data.data.playerName;
-                kickPlayerByName(targetName, ws);
-                return;
+
+            const targetName = data.data?.playerName;
+            if (!targetName) {
+              server.send(JSON.stringify({
+                type: 'error',
+                data: { message: 'Player name required!' }
+              }));
+              return;
             }
-            
-            // ─── Handle server info request ───
-            if (data.type === 'server_info') {
-                const players = getPlayerList();
-                ws.send(JSON.stringify({
-                    type: 'server_info',
-                    data: {
-                        players: players,
-                        totalPlayers: players.length,
-                        owner: getOwnerName()
-                    }
-                }));
-                return;
-            }
-            
-            // ─── Handle list request ───
-            if (data.type === 'list_players') {
-                const players = getPlayerList();
-                ws.send(JSON.stringify({
-                    type: 'player_list',
-                    data: { players: players }
-                }));
-                return;
-            }
-            
+
+            kickPlayerByName(targetName, server);
+            return;
+          }
+
+          // ─── LIST PLAYERS ───
+          if (data.type === 'list_players') {
+            server.send(JSON.stringify({
+              type: 'player_list',
+              data: {
+                players: getPlayerList(),
+                owner: getOwnerName()
+              }
+            }));
+            return;
+          }
+
+          // ─── SERVER INFO ───
+          if (data.type === 'server_info') {
+            server.send(JSON.stringify({
+              type: 'server_info',
+              data: {
+                players: getPlayerList(),
+                totalPlayers: players.size,
+                owner: getOwnerName(),
+                maxPlayers: 50
+              }
+            }));
+            return;
+          }
+
+          // ─── Echo ───
+          server.send(JSON.stringify({
+            type: 'echo',
+            data: data
+          }));
+
         } catch (err) {
-            console.log('📩 Plain message:', message.toString());
+          console.log('📩 Plain message:', event.data);
+          server.send(`Echo: ${event.data}`);
         }
-    });
-    
-    ws.on('close', () => {
-        console.log(`❌ Client disconnected: ${playerName}`);
-        addLog(`👋 Player left: ${playerName}`, 'leave');
+      });
+
+      // ─── Handle disconnect ───
+      server.addEventListener('close', () => {
+        if (playerId) {
+          console.log(`👋 ${playerName} (${playerId}) disconnected`);
+          players.delete(playerId);
+          
+          if (playerId === ownerId) {
+            ownerId = null;
+            console.log('👑 Owner disconnected');
+          }
+
+          broadcastToAll({
+            type: 'player_left',
+            data: {
+              name: playerName,
+              userId: playerId
+            }
+          }, server);
+
+          console.log(`📊 Total players: ${players.size}`);
+        }
+      });
+
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // ─── API: Get Players ───
+    if (url.pathname === '/api/data') {
+      const list = getPlayerList();
+      const owner = list.find(p => p.isOwner);
+      return new Response(JSON.stringify({
+        players: list,
+        ownerName: owner ? owner.name : null,
+        logs: []
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ─── API: Kick Player ───
+    if (url.pathname === '/api/kick' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { playerName, password } = body;
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!playerName) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Player name required!' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        const result = kickPlayerByNameAPI(playerName);
+        return new Response(JSON.stringify(result), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ─── WEB PAGE ───
+    return new Response(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Server Control</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0d0d1a;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      background: #1a1a2e;
+      padding: 30px;
+      border-radius: 20px;
+      max-width: 800px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #2d2d44;
+      padding-bottom: 15px;
+      margin-bottom: 20px;
+    }
+    h1 { color: #a78bfa; font-size: 28px; }
+    .status { background: #22c55e; color: #fff; padding: 4px 16px; border-radius: 20px; font-size: 14px; }
+    .stat-box {
+      background: #0d0d1a;
+      padding: 12px;
+      border-radius: 10px;
+      text-align: center;
+      border: 1px solid #2d2d44;
+      flex: 1;
+    }
+    .stat-box .num { font-size: 24px; font-weight: bold; color: #a78bfa; }
+    .stat-box .label { font-size: 12px; color: #6b7280; }
+    .stats { display: flex; gap: 20px; margin: 15px 0; }
+    .players-list { margin-top: 15px; max-height: 300px; overflow-y: auto; }
+    .player-card {
+      background: #0d0d1a;
+      padding: 10px 16px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-left: 3px solid #4ade80;
+    }
+    .player-card.owner { border-left-color: #fbbf24; }
+    .player-card .name { color: #4ade80; font-weight: bold; }
+    .player-card .id { color: #818cf8; font-size: 12px; }
+    .player-card .executor { 
+      background: #2d2d44; 
+      padding: 2px 12px; 
+      border-radius: 12px; 
+      font-size: 11px; 
+      color: #f472b6;
+    }
+    .player-card .kick-btn {
+      background: #ef4444;
+      color: #fff;
+      border: none;
+      padding: 4px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .player-card .kick-btn:hover { opacity: 0.8; }
+    .empty { color: #6b7280; text-align: center; padding: 20px; }
+    .footer { margin-top: 15px; font-size: 12px; color: #4b5563; text-align: center; }
+    .refresh { cursor: pointer; color: #6b7280; font-size: 12px; float: right; }
+    .refresh:hover { color: #a78bfa; }
+    .cmd-box {
+      margin-top: 15px;
+      display: flex;
+      gap: 10px;
+    }
+    .cmd-box input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #2d2d44;
+      border-radius: 8px;
+      background: #0d0d1a;
+      color: #fff;
+      font-size: 14px;
+    }
+    .cmd-box input:focus { border-color: #a78bfa; outline: none; }
+    .cmd-box button {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 8px;
+      background: #a78bfa;
+      color: #0d0d1a;
+      font-weight: bold;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .cmd-box button:hover { opacity: 0.8; }
+    .log-box {
+      background: #0d0d1a;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 120px;
+      overflow-y: auto;
+      margin-top: 15px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
+    .log-entry .time { color: #6b7280; margin-right: 10px; }
+    .log-entry .msg { color: #e0e0e0; }
+    .log-entry .kick { color: #ef4444; }
+    .log-entry .join { color: #22c55e; }
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #1a1a2e;
+      padding: 16px 24px;
+      border-radius: 12px;
+      border: 1px solid #2d2d44;
+      animation: slideIn 0.3s ease;
+    }
+    .toast.success { border-color: #22c55e; }
+    .toast.error { border-color: #ef4444; }
+    @keyframes slideIn {
+      from { transform: translateX(100px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⚡ Server Control</h1>
+      <span class="status" id="status">● Online</span>
+    </div>
+
+    <div class="stats">
+      <div class="stat-box">
+        <div class="num" id="playerCount">0</div>
+        <div class="label">👥 Players</div>
+      </div>
+      <div class="stat-box">
+        <div class="num" id="ownerName">-</div>
+        <div class="label">👑 Owner</div>
+      </div>
+    </div>
+
+    <div class="players-list">
+      <h3 style="color: #9ca3af; margin-bottom: 10px;">👤 Connected Players <span class="refresh" onclick="fetchData()">↻</span></h3>
+      <div id="playerList"><div class="empty">No players connected</div></div>
+    </div>
+
+    <div class="cmd-box">
+      <input type="text" id="cmdInput" placeholder="Command: kick [player] or list" />
+      <button id="cmdBtn">Send</button>
+    </div>
+
+    <div class="footer">🔒 Password Protected: <span id="passwordDisplay">MewVantaIsTheBest</span></div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <script>
+    const PASSWORD = "MewVantaIsTheBest";
+
+    async function fetchData() {
+      try {
+        const res = await fetch('/api/data');
+        const data = await res.json();
         
-        connectedPlayers.delete(clientId);
-        playerData.delete(clientId);
-        broadcastUpdate();
+        document.getElementById('playerCount').textContent = data.players.length;
+        document.getElementById('ownerName').textContent = data.ownerName || 'None';
+        
+        const list = document.getElementById('playerList');
+        if (data.players.length === 0) {
+          list.innerHTML = '<div class="empty">No players connected</div>';
+          return;
+        }
+        
+        list.innerHTML = data.players.map(p => \`
+          <div class="player-card \${p.isOwner ? 'owner' : ''}">
+            <div>
+              <span class="name">👤 \${p.name}</span>
+              \${p.isOwner ? '<span style="color: #fbbf24; font-size: 12px;">👑 OWNER</span>' : ''}
+              <span class="id">🆔 \${p.userId}</span>
+              <span class="executor">⚡ \${p.executor}</span>
+            </div>
+            <button class="kick-btn" onclick="kickPlayer('\${p.name}')">Kick</button>
+          </div>
+        \`).join('');
+        
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    }
+
+    async function kickPlayer(name) {
+      if (!confirm(\`Kick player: \${name}?\`)) return;
+      
+      const password = prompt('Enter password:');
+      if (!password) return;
+      
+      try {
+        const res = await fetch('/api/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerName: name, password: password })
+        });
+        const data = await res.json();
+        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        fetchData();
+      } catch (err) {
+        showToast('Error: ' + err.message, 'error');
+      }
+    }
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    document.getElementById('cmdBtn').addEventListener('click', async () => {
+      const input = document.getElementById('cmdInput');
+      const text = input.value.trim();
+      if (!text) return;
+      
+      const parts = text.split(' ');
+      const cmd = parts[0].toLowerCase();
+      
+      if (cmd === 'kick' && parts[1]) {
+        await kickPlayer(parts[1]);
+      } else if (cmd === 'list') {
+        await fetchData();
+      } else {
+        showToast('Commands: kick [player], list', 'error');
+      }
+      input.value = '';
     });
-});
+
+    document.getElementById('cmdInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('cmdBtn').click();
+    });
+
+    fetchData();
+    setInterval(fetchData, 3000);
+  </script>
+</body>
+</html>`, {
+      headers: { 'Content-Type': 'text/html; charset=UTF-8' }
+    });
+  }
+};
 
 // ─── Helper: Kick player by name ───
 function kickPlayerByName(name, senderWs) {
-    let targetId = null;
-    let targetWs = null;
-    
-    for (const [id, ws] of connectedPlayers) {
-        const pData = playerData.get(id);
-        if (pData && pData.name === name) {
-            targetId = id;
-            targetWs = ws;
-            break;
-        }
+  let targetId = null;
+  let targetName = null;
+  
+  for (const [id, data] of players) {
+    if (data.name === name) {
+      targetId = id;
+      targetName = data.name;
+      break;
     }
-    
-    if (!targetWs) {
-        if (senderWs) {
-            senderWs.send(JSON.stringify({
-                type: 'error',
-                data: { message: `Player "${name}" not found!` }
-            }));
-        }
-        return;
-    }
-    
-    // Send kick message to target
-    targetWs.send(JSON.stringify({
-        type: 'kick',
-        data: {
-            message: 'You have been kicked by the server owner!'
-        }
-    }));
-    
-    // Close connection
-    setTimeout(() => {
-        if (targetWs.readyState === WebSocket.OPEN) {
-            targetWs.close();
-        }
-    }, 500);
-    
-    addLog(`👢 Kicked: ${name}`, 'kick');
-    
+  }
+  
+  if (!targetId) {
     if (senderWs) {
-        senderWs.send(JSON.stringify({
-            type: 'kick_success',
-            data: { message: `✅ Kicked: ${name}` }
-        }));
+      senderWs.send(JSON.stringify({
+        type: 'error',
+        data: { message: `Player "${name}" not found!` }
+      }));
     }
-    
-    broadcastUpdate();
+    return;
+  }
+  
+  // Remove player
+  players.delete(targetId);
+  
+  if (targetId === ownerId) {
+    ownerId = null;
+  }
+  
+  if (senderWs) {
+    senderWs.send(JSON.stringify({
+      type: 'kick_success',
+      data: { message: `✅ Kicked: ${targetName}` }
+    }));
+  }
+  
+  broadcastToAll({
+    type: 'player_left',
+    data: {
+      name: targetName,
+      userId: targetId,
+      kicked: true
+    }
+  }, senderWs);
+}
+
+// ─── Helper: Kick player from API ───
+function kickPlayerByNameAPI(name) {
+  let targetId = null;
+  let targetName = null;
+  
+  for (const [id, data] of players) {
+    if (data.name === name) {
+      targetId = id;
+      targetName = data.name;
+      break;
+    }
+  }
+  
+  if (!targetId) {
+    return { success: false, message: `Player "${name}" not found!` };
+  }
+  
+  players.delete(targetId);
+  
+  if (targetId === ownerId) {
+    ownerId = null;
+  }
+  
+  broadcastToAll({
+    type: 'player_left',
+    data: {
+      name: targetName,
+      userId: targetId,
+      kicked: true
+    }
+  }, null);
+  
+  return { success: true, message: `✅ Kicked: ${targetName}` };
+}
+
+// ─── Helper: Broadcast to all ───
+function broadcastToAll(message, sender) {
+  const data = JSON.stringify(message);
+  console.log(`📡 Broadcasting: ${message.type}`);
 }
 
 // ─── Helper: Get player list ───
 function getPlayerList() {
-    const players = [];
-    for (const [id, data] of playerData) {
-        players.push({
-            name: data.name || 'Unknown',
-            userId: data.userId || id,
-            executor: data.executor || 'Unknown',
-            isOwner: data.isOwner || false
-        });
-    }
-    players.sort((a, b) => {
-        if (a.isOwner) return -1;
-        if (b.isOwner) return 1;
-        return a.name.localeCompare(b.name);
+  const list = [];
+  for (const [id, player] of players) {
+    list.push({
+      name: player.name,
+      userId: player.userId,
+      executor: player.executor,
+      isOwner: player.isOwner || false,
+      connectedAt: player.connectedAt
     });
-    return players;
+  }
+  list.sort((a, b) => {
+    if (a.isOwner) return -1;
+    if (b.isOwner) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return list;
 }
 
 // ─── Helper: Get owner name ───
 function getOwnerName() {
-    for (const [id, data] of playerData) {
-        if (data.isOwner) return data.name;
-    }
-    return null;
+  for (const [id, player] of players) {
+    if (player.isOwner) return player.name;
+  }
+  return null;
 }
-
-// ─── Helper: Broadcast update ───
-function broadcastUpdate() {
-    const data = JSON.stringify({
-        type: 'update',
-        data: {
-            players: getPlayerList(),
-            owner: getOwnerName()
-        }
-    });
-    
-    for (const [id, ws] of connectedPlayers) {
-        if (ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.send(data);
-            } catch (err) {}
-        }
-    }
-}
-
-// ─── Helper: Add log ───
-function addLog(message, type = 'info') {
-    const time = new Date().toLocaleTimeString();
-    logs.push({ time, message, type });
-    if (logs.length > 100) logs.shift();
-    console.log(`[${time}] ${message}`);
-}
-
-// ─── Start Server ───
-server.listen(port, () => {
-    console.log(`✅ Server running on port ${port}`);
-    console.log(`📍 WebSocket URL: ws://localhost:${port}/ws`);
-    console.log(`📍 Web UI: http://localhost:${port}`);
-    console.log(`🔒 Password: ${PASSWORD}`);
-});
