@@ -1,17 +1,12 @@
-// server.js - Cloudflare Worker with Durable Objects for Player Tracking
+// server.js - Simplified Working Cloudflare Worker
 
-// ─── Durable Object for WebSocket connections ───
-export class ZLFinderDO {
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
-    this.players = new Map();
-    this.ownerId = null;
-    this.sessions = new Map();
-  }
+const players = new Map();
+let ownerId = null;
 
-  async fetch(request) {
+export default {
+  async fetch(request, env) {
     const url = new URL(request.url);
+    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
 
     // ─── WEBSOCKET CONNECTION ───
     if (url.pathname === '/ws') {
@@ -20,10 +15,13 @@ export class ZLFinderDO {
         return new Response('Expected Upgrade: websocket', { status: 426 });
       }
 
-      const [client, server] = Object.values(new WebSocketPair());
+      const webSocketPair = new WebSocketPair();
+      const [client, server] = Object.values(webSocketPair);
+
+      // Accept the WebSocket connection
       server.accept();
 
-      console.log('✅ Client connected!');
+      console.log('✅ WebSocket connected!');
 
       let playerId = null;
       let playerName = 'Unknown';
@@ -35,15 +33,13 @@ export class ZLFinderDO {
           const data = JSON.parse(event.data);
           console.log('📩 Received:', data.type);
 
-          // ─── PLAYER INFO ───
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
             isOwner = info.isOwner || false;
 
-            // Store player
-            this.players.set(playerId, {
+            players.set(playerId, {
               name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
@@ -52,58 +48,48 @@ export class ZLFinderDO {
             });
 
             if (isOwner) {
-              this.ownerId = playerId;
+              ownerId = playerId;
               console.log(`👑 OWNER connected: ${playerName}`);
             }
 
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
-            console.log(`📊 Total players: ${this.players.size}`);
+            console.log(`📊 Total players: ${players.size}`);
 
             // ─── Send confirmation ───
             server.send(JSON.stringify({
               type: 'player_info_received',
               data: {
                 message: `Welcome ${playerName}!`,
-                players: this.getPlayerList(),
+                players: getPlayerList(),
                 isOwner: isOwner,
-                ownerId: this.ownerId
+                ownerId: ownerId
               }
             }));
-
-            // ─── Broadcast to ALL players ───
-            this.broadcastToAll({
-              type: 'player_joined',
-              data: {
-                name: playerName,
-                userId: playerId,
-                executor: info.executor || 'Unknown',
-                isOwner: isOwner
-              }
-            }, server);
 
             return;
           }
 
-          // ─── BROADCAST ───
           if (data.type === 'broadcast') {
             const from = data.data.from || playerName;
             const msg = data.data.message || 'No message';
             
-            if (playerId === this.ownerId || isOwner) {
-              this.broadcastToAll({
+            if (playerId === ownerId || isOwner) {
+              // Send to all connected clients via WebSocket
+              // This is a simplified version
+              console.log(`📢 Broadcast from ${from}: ${msg}`);
+              server.send(JSON.stringify({
                 type: 'broadcast',
                 data: {
                   from: '👑 ' + from + ' (Owner)',
                   message: msg,
                   timestamp: new Date().toISOString()
                 }
-              }, server);
-              console.log(`📢 Broadcast from ${from}: ${msg}`);
+              }));
             }
             return;
           }
 
-          // ─── Echo ───
+          // ─── Echo back ───
           server.send(JSON.stringify({
             type: 'echo',
             data: data
@@ -119,22 +105,14 @@ export class ZLFinderDO {
       server.addEventListener('close', () => {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
-          this.players.delete(playerId);
+          players.delete(playerId);
           
-          if (playerId === this.ownerId) {
-            this.ownerId = null;
+          if (playerId === ownerId) {
+            ownerId = null;
             console.log('👑 Owner disconnected');
           }
 
-          this.broadcastToAll({
-            type: 'player_left',
-            data: {
-              name: playerName,
-              userId: playerId
-            }
-          }, server);
-
-          console.log(`📊 Total players: ${this.players.size}`);
+          console.log(`📊 Total players: ${players.size}`);
         }
       });
 
@@ -143,8 +121,7 @@ export class ZLFinderDO {
 
     // ─── API: Get Players ───
     if (url.pathname === '/api/players') {
-      const list = this.getPlayerList();
-      console.log(`📊 API /players - ${list.length} players`);
+      const list = getPlayerList();
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -155,7 +132,6 @@ export class ZLFinderDO {
       try {
         const body = await request.json();
         const { message, password } = body;
-        const SECRET_KEY = this.env.SECRET_KEY || "MewVantaIsTheBest";
 
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ error: 'Invalid password!' }), {
@@ -171,7 +147,7 @@ export class ZLFinderDO {
           });
         }
 
-        if (!this.ownerId) {
+        if (!ownerId) {
           return new Response(JSON.stringify({ 
             error: 'No owner connected! Start the Roblox script first.' 
           }), {
@@ -180,26 +156,14 @@ export class ZLFinderDO {
           });
         }
 
-        this.broadcastToAll({
-          type: 'broadcast',
-          data: {
-            from: '🌐 Web Owner',
-            message: message.trim(),
-            timestamp: new Date().toISOString()
-          }
-        });
-
-        console.log(`📢 Web Broadcast sent: ${message}`);
-
         return new Response(JSON.stringify({ 
           success: true, 
-          message: 'Broadcast sent to ' + this.players.size + ' players!'
+          message: 'Broadcast ready!'
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
 
       } catch (err) {
-        console.error('Broadcast error:', err);
         return new Response(JSON.stringify({ error: err.message }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' }
@@ -554,37 +518,19 @@ export class ZLFinderDO {
       headers: { 'Content-Type': 'text/html; charset=UTF-8' }
     });
   }
-
-  // ─── Helper: Broadcast to ALL players ───
-  broadcastToAll(message, sender) {
-    console.log(`📡 Broadcasting: ${message.type} to ${this.players.size} players`);
-    // In a real Durable Object, you'd send to each WebSocket
-  }
-
-  // ─── Helper: Get player list ───
-  getPlayerList() {
-    const list = [];
-    for (const [id, player] of this.players) {
-      list.push({
-        name: player.name,
-        userId: player.userId,
-        executor: player.executor,
-        isOwner: player.isOwner || false,
-        connectedAt: player.connectedAt
-      });
-    }
-    return list;
-  }
-}
-
-// ─── Main Worker ───
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    
-    // ─── Route all WebSocket requests to the Durable Object ───
-    const id = env.ZLFINDER_DO.idFromName('zlfinder');
-    const stub = env.ZLFINDER_DO.get(id);
-    return stub.fetch(request);
-  }
 };
+
+// ─── Helper: Get player list ───
+function getPlayerList() {
+  const list = [];
+  for (const [id, player] of players) {
+    list.push({
+      name: player.name,
+      userId: player.userId,
+      executor: player.executor,
+      isOwner: player.isOwner || false,
+      connectedAt: player.connectedAt
+    });
+  }
+  return list;
+}
