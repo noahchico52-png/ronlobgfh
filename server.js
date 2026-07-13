@@ -1,4 +1,4 @@
-// server.js - Cloudflare Worker with Kick Feature
+// server.js - Cloudflare Worker with Proper Kick Support
 
 const players = new Map();
 let ownerId = null;
@@ -30,20 +30,19 @@ export default {
           const data = JSON.parse(event.data);
           console.log('📩 Received:', data.type);
 
-          // ─── PLAYER INFO ───
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
             isOwner = info.isOwner || false;
 
+            // Store with WebSocket reference
             players.set(playerId, {
               name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
               isOwner: isOwner,
-              connectedAt: new Date().toISOString(),
-              ws: server
+              connectedAt: new Date().toISOString()
             });
 
             if (isOwner) {
@@ -54,7 +53,6 @@ export default {
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
 
-            // ─── Send confirmation ───
             server.send(JSON.stringify({
               type: 'player_info_received',
               data: {
@@ -68,7 +66,6 @@ export default {
             return;
           }
 
-          // ─── Echo back ───
           server.send(JSON.stringify({
             type: 'echo',
             data: data
@@ -80,17 +77,13 @@ export default {
         }
       });
 
-      // ─── Handle disconnect ───
       server.addEventListener('close', () => {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
           players.delete(playerId);
-          
           if (playerId === ownerId) {
             ownerId = null;
-            console.log('👑 Owner disconnected');
           }
-
           console.log(`📊 Total players: ${players.size}`);
         }
       });
@@ -112,7 +105,6 @@ export default {
         const body = await request.json();
         const { playerName, password } = body;
 
-        // ─── Check password ───
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ 
             success: false, 
@@ -133,21 +125,19 @@ export default {
           });
         }
 
-        // ─── Find the player ───
+        // Find the player
         let targetId = null;
-        let targetWs = null;
         let targetName = null;
 
         for (const [id, data] of players) {
           if (data.name === playerName) {
             targetId = id;
-            targetWs = data.ws;
             targetName = data.name;
             break;
           }
         }
 
-        if (!targetWs) {
+        if (!targetId) {
           return new Response(JSON.stringify({ 
             success: false, 
             message: `Player "${playerName}" not found!` 
@@ -157,27 +147,7 @@ export default {
           });
         }
 
-        // ─── Send KICK message to the player ───
-        try {
-          targetWs.send(JSON.stringify({
-            type: 'kick',
-            data: {
-              message: 'You have been kicked by the server owner!'
-            }
-          }));
-          console.log(`👢 Sent kick to: ${targetName}`);
-        } catch (err) {
-          console.error('Failed to send kick message:', err);
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Failed to send kick: ' + err.message 
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        // ─── Remove player from list ───
+        // Remove player from list (they'll be kicked when their script receives the message)
         players.delete(targetId);
         if (targetId === ownerId) {
           ownerId = null;
