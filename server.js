@@ -1,10 +1,12 @@
-// server.js - Cloudflare Worker (Player Tracking Only - Working)
+// server.js - Cloudflare Worker with Player Tracking + Kick Button
 
 const players = new Map();
+let ownerId = null;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
 
     // ─── WEBSOCKET CONNECTION ───
     if (url.pathname === '/ws') {
@@ -20,8 +22,8 @@ export default {
 
       let playerId = null;
       let playerName = 'Unknown';
+      let isOwner = false;
 
-      // ─── Handle messages ───
       server.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -31,14 +33,20 @@ export default {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
+            isOwner = info.isOwner || false;
 
             players.set(playerId, {
               name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
-              isOwner: info.isOwner || false,
+              isOwner: isOwner,
               connectedAt: new Date().toISOString()
             });
+
+            if (isOwner) {
+              ownerId = playerId;
+              console.log(`👑 OWNER connected: ${playerName}`);
+            }
 
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
@@ -47,7 +55,9 @@ export default {
               type: 'player_info_received',
               data: {
                 message: `Welcome ${playerName}!`,
-                players: getPlayerList()
+                players: getPlayerList(),
+                isOwner: isOwner,
+                ownerId: ownerId
               }
             }));
 
@@ -69,6 +79,9 @@ export default {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
           players.delete(playerId);
+          if (playerId === ownerId) {
+            ownerId = null;
+          }
           console.log(`📊 Total players: ${players.size}`);
         }
       });
@@ -84,7 +97,79 @@ export default {
       });
     }
 
-    // ─── WEB PAGE ───
+    // ─── API: Remove Player (Kick) ───
+    if (url.pathname === '/api/kick' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { playerName, password } = body;
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!playerName) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Player name required!' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        let targetId = null;
+        let targetName = null;
+
+        for (const [id, data] of players) {
+          if (data.name === playerName) {
+            targetId = id;
+            targetName = data.name;
+            break;
+          }
+        }
+
+        if (!targetId) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: `Player "${playerName}" not found!` 
+          }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        players.delete(targetId);
+        if (targetId === ownerId) {
+          ownerId = null;
+        }
+
+        console.log(`👢 Kicked: ${targetName} (${targetId})`);
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          message: `✅ Removed: ${targetName}` 
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ─── WEB PAGE WITH KICK BUTTON ───
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
@@ -93,7 +178,7 @@ export default {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0d0d1a; color: #e0e0e0; font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-    .container { background: #1a1a2e; padding: 30px; border-radius: 20px; max-width: 600px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+    .container { background: #1a1a2e; padding: 30px; border-radius: 20px; max-width: 700px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
     .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2d2d44; padding-bottom: 15px; margin-bottom: 20px; }
     h1 { color: #a78bfa; font-size: 28px; }
     .status { background: #22c55e; color: #fff; padding: 4px 16px; border-radius: 20px; font-size: 14px; }
@@ -105,13 +190,23 @@ export default {
     .stat-box .label { font-size: 12px; color: #6b7280; }
     .players { margin-top: 15px; }
     .player-card { background: #0d0d1a; padding: 10px 16px; border-radius: 8px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; border-left: 3px solid #4ade80; }
+    .player-card.owner { border-left-color: #fbbf24; }
     .player-card .name { color: #4ade80; font-weight: bold; }
+    .player-card .owner-badge { color: #fbbf24; font-size: 12px; margin-left: 6px; }
     .player-card .id { color: #818cf8; font-size: 12px; }
     .player-card .executor { background: #2d2d44; padding: 2px 12px; border-radius: 12px; font-size: 11px; color: #f472b6; }
+    .player-card .kick-btn { background: #ef4444; color: #fff; border: none; padding: 4px 14px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: bold; }
+    .player-card .kick-btn:hover { opacity: 0.8; transform: scale(1.02); }
     .empty { color: #6b7280; text-align: center; padding: 20px; }
     .footer { margin-top: 20px; font-size: 12px; color: #4b5563; text-align: center; }
     .refresh { cursor: pointer; color: #6b7280; font-size: 12px; }
     .refresh:hover { color: #a78bfa; }
+    .toast {
+      position: fixed; top: 20px; right: 20px; background: #1a1a2e; padding: 16px 24px; border-radius: 12px; border: 1px solid #2d2d44; animation: slideIn 0.3s ease; z-index: 999;
+    }
+    .toast.success { border-color: #22c55e; }
+    .toast.error { border-color: #ef4444; }
+    @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   </style>
 </head>
 <body>
@@ -144,7 +239,11 @@ export default {
     <div class="footer">🔌 Connect your Roblox script to the URL above</div>
   </div>
 
+  <div id="toastContainer"></div>
+
   <script>
+    const PASSWORD = "MewVantaIsTheBest";
+
     async function fetchPlayers() {
       try {
         const res = await fetch('/api/players');
@@ -162,18 +261,59 @@ export default {
         }
 
         list.innerHTML = data.map(p => \`
-          <div class="player-card">
+          <div class="player-card \${p.isOwner ? 'owner' : ''}">
             <div>
               <span class="name">👤 \${p.name || 'Unknown'}</span>
-              \${p.isOwner ? '<span style="color: #fbbf24; font-size: 12px;">👑 OWNER</span>' : ''}
+              \${p.isOwner ? '<span class="owner-badge">👑 OWNER</span>' : ''}
               <span class="id">🆔 \${p.userId || 'Unknown'}</span>
+              <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
             </div>
-            <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
+            <button class="kick-btn" onclick="kickPlayer('\${p.name}')">Kick</button>
           </div>
         \`).join('');
       } catch (err) {
         console.error('Fetch error:', err);
       }
+    }
+
+    async function kickPlayer(name) {
+      if (!confirm(\`Remove player: \${name}?\`)) return;
+      
+      const password = prompt('Enter password:');
+      if (!password) {
+        showToast('❌ Password required!', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerName: name, password: password })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+          showToast('✅ ' + data.message, 'success');
+        } else {
+          showToast('❌ ' + (data.message || 'Failed'), 'error');
+        }
+        fetchPlayers();
+      } catch (err) {
+        showToast('❌ Error: ' + err.message, 'error');
+      }
+    }
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
     }
 
     fetchPlayers();
