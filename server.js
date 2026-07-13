@@ -1,6 +1,4 @@
-// server.js - Cloudflare Worker with Password Protection
-
-const SECRET_KEY = "MewVantaIsTheBest"; // CHANGE THIS TO YOUR PASSWORD
+// server.js - Cloudflare Worker with Password GUI
 
 const players = new Map();
 let ownerId = null;
@@ -8,8 +6,9 @@ let ownerId = null;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
 
-    // ─── WEBSOCKET CONNECTION (No password required) ───
+    // ─── WEBSOCKET CONNECTION ───
     if (url.pathname === '/ws') {
       const upgrade = request.headers.get('Upgrade');
       if (upgrade !== 'websocket') {
@@ -96,13 +95,12 @@ export default {
       });
     }
 
-    // ─── API: Send Broadcast (REQUIRES PASSWORD) ───
+    // ─── API: Send Broadcast ───
     if (url.pathname === '/api/broadcast' && request.method === 'POST') {
       try {
         const body = await request.json();
         const { message, password } = body;
 
-        // ─── PASSWORD CHECK ───
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ error: 'Invalid password!' }), {
             status: 401,
@@ -117,7 +115,6 @@ export default {
           });
         }
 
-        // Check if there's an owner connected
         if (!ownerId) {
           return new Response(JSON.stringify({ 
             error: 'No owner connected! Start the Roblox script first.' 
@@ -142,17 +139,7 @@ export default {
       }
     }
 
-    // ─── WEB PAGE (REQUIRES PASSWORD IN URL) ───
-    const userKey = url.searchParams.get('key');
-    
-    if (!userKey || userKey !== SECRET_KEY) {
-      return new Response(`🔒 Access Denied - Invalid Password`, {
-        status: 401,
-        headers: { 'Content-Type': 'text/plain' }
-      });
-    }
-
-    // ─── WEB PAGE (Only shows if password is correct) ───
+    // ─── WEB PAGE WITH PASSWORD GUI ───
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
@@ -196,6 +183,7 @@ export default {
       border: 1px solid #2d2d44;
     }
     .url-box code { color: #fbbf24; font-size: 14px; word-break: break-all; }
+    
     .broadcast-box {
       background: #0d0d1a;
       padding: 20px;
@@ -204,6 +192,36 @@ export default {
       margin: 15px 0;
     }
     .broadcast-box h3 { color: #fbbf24; margin-bottom: 10px; }
+    
+    .password-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .password-row input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #2d2d44;
+      border-radius: 8px;
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 14px;
+    }
+    .password-row input:focus { border-color: #a78bfa; outline: none; }
+    .password-row button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #a78bfa;
+      color: #0d0d1a;
+      font-weight: bold;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .password-row button:hover { opacity: 0.8; }
+    .password-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
     .broadcast-row {
       display: flex;
       gap: 10px;
@@ -218,6 +236,7 @@ export default {
       font-size: 14px;
     }
     .broadcast-row input:focus { border-color: #a78bfa; outline: none; }
+    .broadcast-row input:disabled { opacity: 0.3; }
     .broadcast-row button {
       padding: 12px 24px;
       border: none;
@@ -231,6 +250,15 @@ export default {
     }
     .broadcast-row button:hover { opacity: 0.8; transform: scale(1.02); }
     .broadcast-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .status-msg {
+      font-size: 12px;
+      margin-top: 6px;
+      color: #6b7280;
+    }
+    .status-msg.success { color: #22c55e; }
+    .status-msg.error { color: #ef4444; }
+    
     .stats {
       display: flex;
       gap: 20px;
@@ -246,6 +274,7 @@ export default {
     }
     .stat-box .num { font-size: 24px; font-weight: bold; color: #a78bfa; }
     .stat-box .label { font-size: 12px; color: #6b7280; }
+    
     .players { margin-top: 15px; }
     .players h3 { color: #9ca3af; margin-bottom: 10px; font-weight: normal; }
     .player-card {
@@ -289,6 +318,15 @@ export default {
       from { transform: translateX(100px); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
+    
+    .locked {
+      opacity: 0.3;
+      pointer-events: none;
+    }
+    .unlocked {
+      opacity: 1;
+      pointer-events: auto;
+    }
   </style>
 </head>
 <body>
@@ -304,14 +342,20 @@ export default {
 
     <div class="broadcast-box">
       <h3>📢 Send Broadcast</h3>
-      <div class="broadcast-row">
-        <input type="password" id="passwordInput" placeholder="Enter password..." style="flex: 0.5; min-width: 100px;" />
-        <input type="text" id="broadcastInput" placeholder="Type your broadcast message..." />
-        <button id="broadcastBtn">📢 Send</button>
+      
+      <!-- ─── PASSWORD INPUT ─── -->
+      <div class="password-row">
+        <input type="password" id="passwordInput" placeholder="Enter password to unlock..." />
+        <button id="unlockBtn">🔓 Unlock</button>
       </div>
-      <div style="margin-top: 8px; font-size: 11px; color: #6b7280;">
-        🔒 Password required to send broadcasts
+      
+      <!-- ─── BROADCAST INPUT (locked by default) ─── -->
+      <div class="broadcast-row" id="broadcastRow">
+        <input type="text" id="broadcastInput" placeholder="Type your broadcast message..." disabled />
+        <button id="broadcastBtn" disabled>📢 Send</button>
       </div>
+      
+      <div class="status-msg" id="statusMsg">🔒 Enter password to send broadcasts</div>
     </div>
 
     <div class="stats">
@@ -336,22 +380,78 @@ export default {
   <div id="toastContainer"></div>
 
   <script>
-    const PASSWORD = "MewVantaIsTheBest"; // CHANGE THIS TO YOUR PASSWORD
+    // ─── Elements ───
     const passwordInput = document.getElementById('passwordInput');
+    const unlockBtn = document.getElementById('unlockBtn');
     const broadcastInput = document.getElementById('broadcastInput');
     const broadcastBtn = document.getElementById('broadcastBtn');
+    const statusMsg = document.getElementById('statusMsg');
     const playerCount = document.getElementById('playerCount');
     const ownerStatus = document.getElementById('ownerStatus');
     const playerList = document.getElementById('playerList');
+    const broadcastRow = document.getElementById('broadcastRow');
 
-    async function sendBroadcast() {
+    let isUnlocked = false;
+
+    // ─── Unlock ───
+    async function unlock() {
       const password = passwordInput.value.trim();
-      const message = broadcastInput.value.trim();
-
       if (!password) {
-        showToast('❌ Please enter the password!', 'error');
+        showToast('❌ Please enter a password!', 'error');
         return;
       }
+
+      unlockBtn.disabled = true;
+      unlockBtn.textContent = '⏳ Checking...';
+
+      try {
+        const res = await fetch('/api/broadcast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: 'test',
+            password: password
+          })
+        });
+
+        const data = await res.json();
+
+        if (res.status === 401) {
+          showToast('❌ Invalid password!', 'error');
+          statusMsg.textContent = '❌ Invalid password!';
+          statusMsg.className = 'status-msg error';
+          unlockBtn.disabled = false;
+          unlockBtn.textContent = '🔓 Unlock';
+          return;
+        }
+
+        // Password is correct!
+        isUnlocked = true;
+        passwordInput.disabled = true;
+        unlockBtn.textContent = '✅ Unlocked';
+        unlockBtn.style.background = '#22c55e';
+        broadcastInput.disabled = false;
+        broadcastBtn.disabled = false;
+        statusMsg.textContent = '✅ Unlocked! You can now send broadcasts.';
+        statusMsg.className = 'status-msg success';
+        showToast('✅ Unlocked successfully!', 'success');
+
+      } catch (err) {
+        showToast('❌ Error: ' + err.message, 'error');
+        unlockBtn.disabled = false;
+        unlockBtn.textContent = '🔓 Unlock';
+      }
+    }
+
+    // ─── Send Broadcast ───
+    async function sendBroadcast() {
+      if (!isUnlocked) {
+        showToast('❌ Please unlock first!', 'error');
+        return;
+      }
+
+      const password = passwordInput.value.trim();
+      const message = broadcastInput.value.trim();
 
       if (!message) {
         showToast('❌ Please enter a message!', 'error');
@@ -387,6 +487,7 @@ export default {
       broadcastBtn.textContent = '📢 Send';
     }
 
+    // ─── Fetch Players ───
     async function fetchPlayers() {
       try {
         const res = await fetch('/api/players');
@@ -417,6 +518,7 @@ export default {
       }
     }
 
+    // ─── Toast ───
     function showToast(message, type = 'success') {
       const container = document.getElementById('toastContainer');
       const toast = document.createElement('div');
@@ -429,14 +531,17 @@ export default {
       }, 3000);
     }
 
+    // ─── Events ───
+    unlockBtn.addEventListener('click', unlock);
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') unlock();
+    });
     broadcastBtn.addEventListener('click', sendBroadcast);
     broadcastInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendBroadcast();
     });
-    passwordInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendBroadcast();
-    });
 
+    // ─── Auto Refresh ───
     fetchPlayers();
     setInterval(fetchPlayers, 3000);
   </script>
