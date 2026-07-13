@@ -1,6 +1,7 @@
-// server.js - Fixed Cloudflare Worker with Player Tracking
+// server.js - Cloudflare Worker with Password Protection
 
-// ─── Store connected players ───
+const SECRET_KEY = "MewVantaIsTheBest"; // CHANGE THIS TO YOUR PASSWORD
+
 const players = new Map();
 let ownerId = null;
 
@@ -8,7 +9,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // ─── WEBSOCKET CONNECTION ───
+    // ─── WEBSOCKET CONNECTION (No password required) ───
     if (url.pathname === '/ws') {
       const upgrade = request.headers.get('Upgrade');
       if (upgrade !== 'websocket') {
@@ -24,20 +25,17 @@ export default {
       let playerName = 'Unknown';
       let isOwner = false;
 
-      // ─── Handle messages ───
       server.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
           console.log('📩 Received:', data.type);
 
-          // ─── PLAYER INFO ───
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
             isOwner = info.isOwner || false;
 
-            // Store player
             players.set(playerId, {
               name: playerName,
               userId: playerId,
@@ -54,7 +52,6 @@ export default {
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
 
-            // ─── Send confirmation ───
             server.send(JSON.stringify({
               type: 'player_info_received',
               data: {
@@ -66,26 +63,6 @@ export default {
             return;
           }
 
-          // ─── BROADCAST (from Roblox) ───
-          if (data.type === 'broadcast') {
-            const from = data.data.from || playerName;
-            const msg = data.data.message || 'No message';
-            
-            if (playerId === ownerId || isOwner) {
-              broadcastToAll({
-                type: 'broadcast',
-                data: {
-                  from: '👑 ' + from + ' (Owner)',
-                  message: msg,
-                  timestamp: new Date().toISOString()
-                }
-              });
-              console.log(`📢 Broadcast from owner: ${msg}`);
-            }
-            return;
-          }
-
-          // ─── Echo back ───
           server.send(JSON.stringify({
             type: 'echo',
             data: data
@@ -97,17 +74,14 @@ export default {
         }
       });
 
-      // ─── Handle disconnect ───
       server.addEventListener('close', () => {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
           players.delete(playerId);
-          
           if (playerId === ownerId) {
             ownerId = null;
             console.log('👑 Owner disconnected');
           }
-          console.log(`📊 Total players: ${players.size}`);
         }
       });
 
@@ -117,24 +91,21 @@ export default {
     // ─── API: Get Players ───
     if (url.pathname === '/api/players') {
       const list = getPlayerList();
-      console.log(`📊 API /players called - returning ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ─── API: Send Broadcast (from Web) ───
+    // ─── API: Send Broadcast (REQUIRES PASSWORD) ───
     if (url.pathname === '/api/broadcast' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const { message, ownerToken } = body;
+        const { message, password } = body;
 
-        // Check if there's an owner connected
-        if (!ownerId) {
-          return new Response(JSON.stringify({ 
-            error: 'No owner connected! Start the Roblox script first.' 
-          }), {
-            status: 400,
+        // ─── PASSWORD CHECK ───
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ error: 'Invalid password!' }), {
+            status: 401,
             headers: { 'Content-Type': 'application/json' }
           });
         }
@@ -146,15 +117,15 @@ export default {
           });
         }
 
-        // Broadcast to all connected players
-        broadcastToAll({
-          type: 'broadcast',
-          data: {
-            from: '🌐 Web Owner',
-            message: message.trim(),
-            timestamp: new Date().toISOString()
-          }
-        });
+        // Check if there's an owner connected
+        if (!ownerId) {
+          return new Response(JSON.stringify({ 
+            error: 'No owner connected! Start the Roblox script first.' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
 
         return new Response(JSON.stringify({ 
           success: true, 
@@ -171,7 +142,17 @@ export default {
       }
     }
 
-    // ─── WEB PAGE ───
+    // ─── WEB PAGE (REQUIRES PASSWORD IN URL) ───
+    const userKey = url.searchParams.get('key');
+    
+    if (!userKey || userKey !== SECRET_KEY) {
+      return new Response(`🔒 Access Denied - Invalid Password`, {
+        status: 401,
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+
+    // ─── WEB PAGE (Only shows if password is correct) ───
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
@@ -295,181 +276,4 @@ export default {
     .toast {
       position: fixed;
       top: 20px;
-      right: 20px;
-      background: #1a1a2e;
-      padding: 16px 24px;
-      border-radius: 12px;
-      border: 1px solid #2d2d44;
-      animation: slideIn 0.3s ease;
-    }
-    .toast.success { border-color: #22c55e; }
-    .toast.error { border-color: #ef4444; }
-    @keyframes slideIn {
-      from { transform: translateX(100px); opacity: 0; }
-      to { transform: translateX(0); opacity: 1; }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>⚡ ZLFinder</h1>
-      <span class="status">● Online</span>
-    </div>
-
-    <div class="url-box">
-      <code>wss://zlfinder-websocket.noahchico52.workers.dev/ws</code>
-    </div>
-
-    <div class="broadcast-box">
-      <h3>📢 Send Broadcast</h3>
-      <div class="broadcast-row">
-        <input type="text" id="broadcastInput" placeholder="Type your broadcast message..." />
-        <button id="broadcastBtn">📢 Send</button>
-      </div>
-      <div style="margin-top: 8px; font-size: 11px; color: #6b7280;">
-        🔒 Only the server owner can send broadcasts
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat-box">
-        <div class="num" id="playerCount">0</div>
-        <div class="label">👥 Players</div>
-      </div>
-      <div class="stat-box">
-        <div class="num" id="ownerStatus">-</div>
-        <div class="label">👑 Owner</div>
-      </div>
-    </div>
-
-    <div class="players">
-      <h3>👤 Connected Players <span class="refresh" onclick="fetchPlayers()">↻</span></h3>
-      <div id="playerList"><div class="empty">No players connected</div></div>
-    </div>
-
-    <div class="footer">🔌 Connect your Roblox script to the URL above</div>
-  </div>
-
-  <div id="toastContainer"></div>
-
-  <script>
-    const broadcastInput = document.getElementById('broadcastInput');
-    const broadcastBtn = document.getElementById('broadcastBtn');
-    const playerCount = document.getElementById('playerCount');
-    const ownerStatus = document.getElementById('ownerStatus');
-    const playerList = document.getElementById('playerList');
-
-    async function sendBroadcast() {
-      const message = broadcastInput.value.trim();
-      if (!message) {
-        showToast('Please enter a message', 'error');
-        return;
-      }
-
-      broadcastBtn.disabled = true;
-      broadcastBtn.textContent = 'Sending...';
-
-      try {
-        const res = await fetch('/api/broadcast', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message })
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          showToast('✅ ' + data.message, 'success');
-          broadcastInput.value = '';
-        } else {
-          showToast('❌ ' + (data.error || 'Failed'), 'error');
-        }
-      } catch (err) {
-        showToast('❌ Error: ' + err.message, 'error');
-      }
-
-      broadcastBtn.disabled = false;
-      broadcastBtn.textContent = '📢 Send';
-    }
-
-    async function fetchPlayers() {
-      try {
-        const res = await fetch('/api/players');
-        const data = await res.json();
-        console.log('📊 Players:', data);
-
-        playerCount.textContent = data.length;
-        const owner = data.find(p => p.isOwner);
-        ownerStatus.textContent = owner ? owner.name : 'None';
-        ownerStatus.style.color = owner ? '#fbbf24' : '#6b7280';
-
-        if (data.length === 0) {
-          playerList.innerHTML = '<div class="empty">No players connected</div>';
-          return;
-        }
-
-        playerList.innerHTML = data.map(p => \`
-          <div class="player-card \${p.isOwner ? 'owner' : ''}">
-            <div>
-              <span class="name">👤 \${p.name || 'Unknown'}</span>
-              \${p.isOwner ? '<span class="owner-badge">👑 OWNER</span>' : ''}
-              <span class="id">🆔 \${p.userId || 'Unknown'}</span>
-            </div>
-            <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
-          </div>
-        \`).join('');
-      } catch (err) {
-        console.error('Fetch error:', err);
-      }
-    }
-
-    function showToast(message, type = 'success') {
-      const container = document.getElementById('toastContainer');
-      const toast = document.createElement('div');
-      toast.className = 'toast ' + type;
-      toast.textContent = message;
-      container.appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
-    }
-
-    broadcastBtn.addEventListener('click', sendBroadcast);
-    broadcastInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendBroadcast();
-    });
-
-    fetchPlayers();
-    setInterval(fetchPlayers, 3000);
-  </script>
-</body>
-</html>`, {
-      headers: { 'Content-Type': 'text/html; charset=UTF-8' }
-    });
-  }
-};
-
-// ─── Helper: Broadcast to all connected players ───
-function broadcastToAll(message) {
-  const data = JSON.stringify(message);
-  // In Cloudflare Workers, we can't broadcast directly without Durable Objects
-  // This is a simplified version - the message will be sent via the WebSocket
-  console.log('📡 Broadcasting:', message.type);
-}
-
-// ─── Helper: Get player list ───
-function getPlayerList() {
-  const list = [];
-  for (const [id, player] of players) {
-    list.push({
-      name: player.name,
-      userId: player.userId,
-      executor: player.executor,
-      isOwner: player.isOwner || false,
-      connectedAt: player.connectedAt
-    });
-  }
-  return list;
-}
+      right:
