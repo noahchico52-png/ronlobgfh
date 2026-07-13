@@ -1,4 +1,4 @@
-// server.js - Cloudflare Worker with Kick Support
+// server.js - Fixed Working Version
 
 const players = new Map();
 
@@ -20,8 +20,6 @@ export default {
       console.log('✅ Client connected!');
 
       let playerId = null;
-      let playerName = 'Unknown';
-      let isOwner = false;
 
       server.addEventListener('message', (event) => {
         try {
@@ -31,25 +29,25 @@ export default {
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
-            playerName = info.name || 'Unknown';
-            isOwner = info.isOwner || false;
 
+            // ─── STORE PLAYER ───
             players.set(playerId, {
-              name: playerName,
+              name: info.name || 'Unknown',
               userId: playerId,
               executor: info.executor || 'Unknown',
-              isOwner: isOwner,
+              isOwner: info.isOwner || false,
               connectedAt: new Date().toISOString(),
               ws: server
             });
 
-            console.log(`👤 Player stored: ${playerName}`);
+            console.log(`👤 Player stored: ${info.name}`);
             console.log(`📊 Total players: ${players.size}`);
 
+            // ─── SEND CONFIRMATION ───
             server.send(JSON.stringify({
               type: 'player_info_received',
               data: {
-                message: `Welcome ${playerName}!`,
+                message: `Welcome ${info.name}!`,
                 players: getPlayerList()
               }
             }));
@@ -72,6 +70,7 @@ export default {
     // ─── API: GET PLAYERS ───
     if (url.pathname === '/api/players') {
       const list = getPlayerList();
+      console.log(`📊 API returning ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
