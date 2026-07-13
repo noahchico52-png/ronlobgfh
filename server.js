@@ -1,10 +1,12 @@
-// server.js - Cloudflare Worker with Player Tracking
+// server.js - Working with Player Tracking + Kick
 
 const players = new Map();
+let ownerId = null;
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
 
     // ─── WEBSOCKET CONNECTION ───
     if (url.pathname === '/ws') {
@@ -20,6 +22,7 @@ export default {
 
       let playerId = null;
       let playerName = 'Unknown';
+      let isOwner = false;
 
       // ─── Handle messages ───
       server.addEventListener('message', (event) => {
@@ -32,14 +35,22 @@ export default {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
+            isOwner = info.isOwner || false;
 
+            // ─── STORE PLAYER ───
             players.set(playerId, {
               name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
-              isOwner: info.isOwner || false,
-              connectedAt: new Date().toISOString()
+              isOwner: isOwner,
+              connectedAt: new Date().toISOString(),
+              ws: server
             });
+
+            if (isOwner) {
+              ownerId = playerId;
+              console.log(`👑 OWNER connected: ${playerName}`);
+            }
 
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
@@ -49,10 +60,35 @@ export default {
               type: 'player_info_received',
               data: {
                 message: `Welcome ${playerName}!`,
-                players: getPlayerList()
+                players: getPlayerList(),
+                isOwner: isOwner,
+                ownerId: ownerId
               }
             }));
 
+            return;
+          }
+
+          // ─── KICK COMMAND ───
+          if (data.type === 'kick') {
+            if (!isOwner) {
+              server.send(JSON.stringify({
+                type: 'error',
+                data: { message: 'Only the owner can kick players!' }
+              }));
+              return;
+            }
+
+            const targetName = data.data?.playerName;
+            if (!targetName) {
+              server.send(JSON.stringify({
+                type: 'error',
+                data: { message: 'Player name required!' }
+              }));
+              return;
+            }
+
+            kickPlayerByName(targetName, server);
             return;
           }
 
@@ -73,6 +109,12 @@ export default {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
           players.delete(playerId);
+          
+          if (playerId === ownerId) {
+            ownerId = null;
+            console.log('👑 Owner disconnected');
+          }
+
           console.log(`📊 Total players: ${players.size}`);
         }
       });
@@ -86,6 +128,48 @@ export default {
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
+    }
+
+    // ─── API: Kick Player ───
+    if (url.pathname === '/api/kick' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { playerName, password } = body;
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!playerName) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Player name required!' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        const result = kickPlayerByNameAPI(playerName);
+        return new Response(JSON.stringify(result), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // ─── WEB PAGE ───
@@ -112,10 +196,18 @@ export default {
     .player-card .name { color: #4ade80; font-weight: bold; }
     .player-card .id { color: #818cf8; font-size: 12px; }
     .player-card .executor { background: #2d2d44; padding: 2px 12px; border-radius: 12px; font-size: 11px; color: #f472b6; }
+    .player-card .kick-btn { background: #ef4444; color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+    .player-card .kick-btn:hover { opacity: 0.8; }
     .empty { color: #6b7280; text-align: center; padding: 20px; }
     .footer { margin-top: 20px; font-size: 12px; color: #4b5563; text-align: center; }
     .refresh { cursor: pointer; color: #6b7280; font-size: 12px; }
     .refresh:hover { color: #a78bfa; }
+    .toast {
+      position: fixed; top: 20px; right: 20px; background: #1a1a2e; padding: 16px 24px; border-radius: 12px; border: 1px solid #2d2d44; animation: slideIn 0.3s ease; z-index: 999;
+    }
+    .toast.success { border-color: #22c55e; }
+    .toast.error { border-color: #ef4444; }
+    @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   </style>
 </head>
 <body>
@@ -148,7 +240,11 @@ export default {
     <div class="footer">🔌 Connect your Roblox script to the URL above</div>
   </div>
 
+  <div id="toastContainer"></div>
+
   <script>
+    const PASSWORD = "MewVantaIsTheBest";
+
     async function fetchPlayers() {
       try {
         const res = await fetch('/api/players');
@@ -172,12 +268,46 @@ export default {
               \${p.isOwner ? '<span style="color: #fbbf24; font-size: 12px;">👑 OWNER</span>' : ''}
               <span class="id">🆔 \${p.userId || 'Unknown'}</span>
             </div>
-            <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
+            <div>
+              <span class="executor">⚡ \${p.executor || 'Unknown'}</span>
+              <button class="kick-btn" onclick="kickPlayer('\${p.name}')">Kick</button>
+            </div>
           </div>
         \`).join('');
       } catch (err) {
         console.error('Fetch error:', err);
       }
+    }
+
+    async function kickPlayer(name) {
+      if (!confirm(\`Kick player: \${name}?\`)) return;
+      const password = prompt('Enter password:');
+      if (!password) return;
+      
+      try {
+        const res = await fetch('/api/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerName: name, password: password })
+        });
+        const data = await res.json();
+        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        fetchPlayers();
+      } catch (err) {
+        showToast('❌ Error: ' + err.message, 'error');
+      }
+    }
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
     }
 
     fetchPlayers();
@@ -203,4 +333,67 @@ function getPlayerList() {
     });
   }
   return list;
+}
+
+// ─── Helper: Kick player by name ───
+function kickPlayerByName(name, senderWs) {
+  let targetId = null;
+  let targetName = null;
+  
+  for (const [id, data] of players) {
+    if (data.name === name) {
+      targetId = id;
+      targetName = data.name;
+      break;
+    }
+  }
+  
+  if (!targetId) {
+    if (senderWs) {
+      senderWs.send(JSON.stringify({
+        type: 'error',
+        data: { message: `Player "${name}" not found!` }
+      }));
+    }
+    return;
+  }
+  
+  players.delete(targetId);
+  
+  if (targetId === ownerId) {
+    ownerId = null;
+  }
+  
+  if (senderWs) {
+    senderWs.send(JSON.stringify({
+      type: 'kick_success',
+      data: { message: `✅ Kicked: ${targetName}` }
+    }));
+  }
+}
+
+// ─── Helper: Kick player from API ───
+function kickPlayerByNameAPI(name) {
+  let targetId = null;
+  let targetName = null;
+  
+  for (const [id, data] of players) {
+    if (data.name === name) {
+      targetId = id;
+      targetName = data.name;
+      break;
+    }
+  }
+  
+  if (!targetId) {
+    return { success: false, message: `Player "${name}" not found!` };
+  }
+  
+  players.delete(targetId);
+  
+  if (targetId === ownerId) {
+    ownerId = null;
+  }
+  
+  return { success: true, message: `✅ Kicked: ${targetName}` };
 }
