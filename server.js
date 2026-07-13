@@ -1,4 +1,4 @@
-// server.js - Cloudflare Worker Server Control
+// server.js - Cloudflare Worker with Kick Support
 
 const players = new Map();
 let ownerId = null;
@@ -42,7 +42,8 @@ export default {
               userId: playerId,
               executor: info.executor || 'Unknown',
               isOwner: isOwner,
-              connectedAt: new Date().toISOString()
+              connectedAt: new Date().toISOString(),
+              ws: server
             });
 
             if (isOwner) {
@@ -64,68 +65,10 @@ export default {
               }
             }));
 
-            // ─── Broadcast update to all ───
-            broadcastToAll({
-              type: 'update',
-              data: {
-                players: getPlayerList(),
-                owner: isOwner ? playerName : null
-              }
-            }, server);
-
             return;
           }
 
-          // ─── KICK COMMAND ───
-          if (data.type === 'kick') {
-            if (!isOwner) {
-              server.send(JSON.stringify({
-                type: 'error',
-                data: { message: 'Only the owner can kick players!' }
-              }));
-              return;
-            }
-
-            const targetName = data.data?.playerName;
-            if (!targetName) {
-              server.send(JSON.stringify({
-                type: 'error',
-                data: { message: 'Player name required!' }
-              }));
-              return;
-            }
-
-            kickPlayerByName(targetName, server);
-            return;
-          }
-
-          // ─── LIST PLAYERS ───
-          if (data.type === 'list_players') {
-            server.send(JSON.stringify({
-              type: 'player_list',
-              data: {
-                players: getPlayerList(),
-                owner: getOwnerName()
-              }
-            }));
-            return;
-          }
-
-          // ─── SERVER INFO ───
-          if (data.type === 'server_info') {
-            server.send(JSON.stringify({
-              type: 'server_info',
-              data: {
-                players: getPlayerList(),
-                totalPlayers: players.size,
-                owner: getOwnerName(),
-                maxPlayers: 50
-              }
-            }));
-            return;
-          }
-
-          // ─── Echo ───
+          // ─── Echo back ───
           server.send(JSON.stringify({
             type: 'echo',
             data: data
@@ -148,14 +91,6 @@ export default {
             console.log('👑 Owner disconnected');
           }
 
-          broadcastToAll({
-            type: 'player_left',
-            data: {
-              name: playerName,
-              userId: playerId
-            }
-          }, server);
-
           console.log(`📊 Total players: ${players.size}`);
         }
       });
@@ -170,18 +105,19 @@ export default {
       return new Response(JSON.stringify({
         players: list,
         ownerName: owner ? owner.name : null,
-        logs: []
+        total: list.length
       }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ─── API: Kick Player ───
+    // ─── API: KICK PLAYER ───
     if (url.pathname === '/api/kick' && request.method === 'POST') {
       try {
         const body = await request.json();
         const { playerName, password } = body;
 
+        // ─── Check password ───
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ 
             success: false, 
@@ -202,8 +138,54 @@ export default {
           });
         }
 
-        const result = kickPlayerByNameAPI(playerName);
-        return new Response(JSON.stringify(result), {
+        // ─── Find the player ───
+        let targetId = null;
+        let targetWs = null;
+        let targetName = null;
+
+        for (const [id, data] of players) {
+          if (data.name === playerName) {
+            targetId = id;
+            targetWs = data.ws;
+            targetName = data.name;
+            break;
+          }
+        }
+
+        if (!targetWs) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: `Player "${playerName}" not found!` 
+          }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        // ─── Send KICK message to the player ───
+        try {
+          targetWs.send(JSON.stringify({
+            type: 'kick',
+            data: {
+              message: 'You have been kicked by the server owner!'
+            }
+          }));
+        } catch (err) {
+          console.error('Failed to send kick message:', err);
+        }
+
+        // ─── Remove player from list ───
+        players.delete(targetId);
+        if (targetId === ownerId) {
+          ownerId = null;
+        }
+
+        console.log(`👢 Kicked: ${targetName} (${targetId})`);
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          message: `✅ Kicked: ${targetName}` 
+        }), {
           headers: { 'Content-Type': 'application/json' }
         });
 
@@ -240,7 +222,7 @@ export default {
       background: #1a1a2e;
       padding: 30px;
       border-radius: 20px;
-      max-width: 800px;
+      max-width: 700px;
       width: 100%;
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     }
@@ -254,6 +236,11 @@ export default {
     }
     h1 { color: #a78bfa; font-size: 28px; }
     .status { background: #22c55e; color: #fff; padding: 4px 16px; border-radius: 20px; font-size: 14px; }
+    .stats {
+      display: flex;
+      gap: 20px;
+      margin: 15px 0;
+    }
     .stat-box {
       background: #0d0d1a;
       padding: 12px;
@@ -264,7 +251,6 @@ export default {
     }
     .stat-box .num { font-size: 24px; font-weight: bold; color: #a78bfa; }
     .stat-box .label { font-size: 12px; color: #6b7280; }
-    .stats { display: flex; gap: 20px; margin: 15px 0; }
     .players-list { margin-top: 15px; max-height: 300px; overflow-y: auto; }
     .player-card {
       background: #0d0d1a;
@@ -290,12 +276,13 @@ export default {
       background: #ef4444;
       color: #fff;
       border: none;
-      padding: 4px 12px;
+      padding: 4px 14px;
       border-radius: 6px;
       cursor: pointer;
       font-size: 11px;
+      font-weight: bold;
     }
-    .player-card .kick-btn:hover { opacity: 0.8; }
+    .player-card .kick-btn:hover { opacity: 0.8; transform: scale(1.02); }
     .empty { color: #6b7280; text-align: center; padding: 20px; }
     .footer { margin-top: 15px; font-size: 12px; color: #4b5563; text-align: center; }
     .refresh { cursor: pointer; color: #6b7280; font-size: 12px; float: right; }
@@ -316,7 +303,7 @@ export default {
     }
     .cmd-box input:focus { border-color: #a78bfa; outline: none; }
     .cmd-box button {
-      padding: 10px 24px;
+      padding: 10px 20px;
       border: none;
       border-radius: 8px;
       background: #a78bfa;
@@ -326,21 +313,6 @@ export default {
       cursor: pointer;
     }
     .cmd-box button:hover { opacity: 0.8; }
-    .log-box {
-      background: #0d0d1a;
-      border-radius: 8px;
-      padding: 10px;
-      max-height: 120px;
-      overflow-y: auto;
-      margin-top: 15px;
-      font-size: 12px;
-      font-family: monospace;
-    }
-    .log-entry { padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
-    .log-entry .time { color: #6b7280; margin-right: 10px; }
-    .log-entry .msg { color: #e0e0e0; }
-    .log-entry .kick { color: #ef4444; }
-    .log-entry .join { color: #22c55e; }
     .toast {
       position: fixed;
       top: 20px;
@@ -350,6 +322,7 @@ export default {
       border-radius: 12px;
       border: 1px solid #2d2d44;
       animation: slideIn 0.3s ease;
+      z-index: 999;
     }
     .toast.success { border-color: #22c55e; }
     .toast.error { border-color: #ef4444; }
@@ -383,11 +356,11 @@ export default {
     </div>
 
     <div class="cmd-box">
-      <input type="text" id="cmdInput" placeholder="Command: kick [player] or list" />
+      <input type="text" id="cmdInput" placeholder="kick PlayerName" />
       <button id="cmdBtn">Send</button>
     </div>
 
-    <div class="footer">🔒 Password Protected: <span id="passwordDisplay">MewVantaIsTheBest</span></div>
+    <div class="footer">🔒 Password: <span id="passwordDisplay">MewVantaIsTheBest</span></div>
   </div>
 
   <div id="toastContainer"></div>
@@ -430,7 +403,10 @@ export default {
       if (!confirm(\`Kick player: \${name}?\`)) return;
       
       const password = prompt('Enter password:');
-      if (!password) return;
+      if (!password) {
+        showToast('❌ Password required!', 'error');
+        return;
+      }
       
       try {
         const res = await fetch('/api/kick', {
@@ -439,10 +415,15 @@ export default {
           body: JSON.stringify({ playerName: name, password: password })
         });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        
+        if (res.ok) {
+          showToast('✅ ' + data.message, 'success');
+        } else {
+          showToast('❌ ' + (data.message || 'Failed'), 'error');
+        }
         fetchData();
       } catch (err) {
-        showToast('Error: ' + err.message, 'error');
+        showToast('❌ Error: ' + err.message, 'error');
       }
     }
 
@@ -471,7 +452,7 @@ export default {
       } else if (cmd === 'list') {
         await fetchData();
       } else {
-        showToast('Commands: kick [player], list', 'error');
+        showToast('❌ Command: kick [player] or list', 'error');
       }
       input.value = '';
     });
@@ -489,94 +470,6 @@ export default {
     });
   }
 };
-
-// ─── Helper: Kick player by name ───
-function kickPlayerByName(name, senderWs) {
-  let targetId = null;
-  let targetName = null;
-  
-  for (const [id, data] of players) {
-    if (data.name === name) {
-      targetId = id;
-      targetName = data.name;
-      break;
-    }
-  }
-  
-  if (!targetId) {
-    if (senderWs) {
-      senderWs.send(JSON.stringify({
-        type: 'error',
-        data: { message: `Player "${name}" not found!` }
-      }));
-    }
-    return;
-  }
-  
-  // Remove player
-  players.delete(targetId);
-  
-  if (targetId === ownerId) {
-    ownerId = null;
-  }
-  
-  if (senderWs) {
-    senderWs.send(JSON.stringify({
-      type: 'kick_success',
-      data: { message: `✅ Kicked: ${targetName}` }
-    }));
-  }
-  
-  broadcastToAll({
-    type: 'player_left',
-    data: {
-      name: targetName,
-      userId: targetId,
-      kicked: true
-    }
-  }, senderWs);
-}
-
-// ─── Helper: Kick player from API ───
-function kickPlayerByNameAPI(name) {
-  let targetId = null;
-  let targetName = null;
-  
-  for (const [id, data] of players) {
-    if (data.name === name) {
-      targetId = id;
-      targetName = data.name;
-      break;
-    }
-  }
-  
-  if (!targetId) {
-    return { success: false, message: `Player "${name}" not found!` };
-  }
-  
-  players.delete(targetId);
-  
-  if (targetId === ownerId) {
-    ownerId = null;
-  }
-  
-  broadcastToAll({
-    type: 'player_left',
-    data: {
-      name: targetName,
-      userId: targetId,
-      kicked: true
-    }
-  }, null);
-  
-  return { success: true, message: `✅ Kicked: ${targetName}` };
-}
-
-// ─── Helper: Broadcast to all ───
-function broadcastToAll(message, sender) {
-  const data = JSON.stringify(message);
-  console.log(`📡 Broadcasting: ${message.type}`);
-}
 
 // ─── Helper: Get player list ───
 function getPlayerList() {
@@ -596,12 +489,4 @@ function getPlayerList() {
     return a.name.localeCompare(b.name);
   });
   return list;
-}
-
-// ─── Helper: Get owner name ───
-function getOwnerName() {
-  for (const [id, player] of players) {
-    if (player.isOwner) return player.name;
-  }
-  return null;
 }
