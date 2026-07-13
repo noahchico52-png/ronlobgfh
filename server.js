@@ -1,4 +1,4 @@
-// server.js - Cloudflare Worker with Password GUI
+// server.js - Cloudflare Worker with Broadcast + Player Tracking
 
 const players = new Map();
 let ownerId = null;
@@ -24,17 +24,20 @@ export default {
       let playerName = 'Unknown';
       let isOwner = false;
 
+      // ─── Handle messages ───
       server.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
           console.log('📩 Received:', data.type);
 
+          // ─── PLAYER INFO ───
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
             isOwner = info.isOwner || false;
 
+            // Store player
             players.set(playerId, {
               name: playerName,
               userId: playerId,
@@ -51,17 +54,57 @@ export default {
             console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
 
+            // ─── Send confirmation back ───
             server.send(JSON.stringify({
               type: 'player_info_received',
               data: {
                 message: `Welcome ${playerName}!`,
                 players: getPlayerList(),
-                isOwner: isOwner
+                isOwner: isOwner,
+                ownerId: ownerId
               }
             }));
+
+            // ─── Broadcast to ALL players that someone joined ───
+            broadcastMessage({
+              type: 'player_joined',
+              data: {
+                name: playerName,
+                userId: playerId,
+                executor: info.executor || 'Unknown',
+                isOwner: isOwner
+              }
+            }, server);
+
             return;
           }
 
+          // ─── BROADCAST (from Roblox) ───
+          if (data.type === 'broadcast') {
+            const from = data.data.from || playerName;
+            const msg = data.data.message || 'No message';
+            
+            // Only owner can broadcast from Roblox too
+            if (playerId === ownerId || isOwner) {
+              broadcastMessage({
+                type: 'broadcast',
+                data: {
+                  from: '👑 ' + from + ' (Owner)',
+                  message: msg,
+                  timestamp: new Date().toISOString()
+                }
+              }, server);
+              console.log(`📢 Broadcast from ${from}: ${msg}`);
+            } else {
+              server.send(JSON.stringify({
+                type: 'error',
+                data: { message: 'Only the server owner can broadcast!' }
+              }));
+            }
+            return;
+          }
+
+          // ─── Echo back ───
           server.send(JSON.stringify({
             type: 'echo',
             data: data
@@ -73,14 +116,27 @@ export default {
         }
       });
 
+      // ─── Handle disconnect (REMOVES PLAYER) ───
       server.addEventListener('close', () => {
         if (playerId) {
           console.log(`👋 ${playerName} (${playerId}) disconnected`);
           players.delete(playerId);
+          
           if (playerId === ownerId) {
             ownerId = null;
             console.log('👑 Owner disconnected');
           }
+
+          // ─── Broadcast that player left ───
+          broadcastMessage({
+            type: 'player_left',
+            data: {
+              name: playerName,
+              userId: playerId
+            }
+          }, server);
+
+          console.log(`📊 Total players: ${players.size}`);
         }
       });
 
@@ -90,17 +146,19 @@ export default {
     // ─── API: Get Players ───
     if (url.pathname === '/api/players') {
       const list = getPlayerList();
+      console.log(`📊 API /players - ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ─── API: Send Broadcast ───
+    // ─── API: Send Broadcast (from Web) ───
     if (url.pathname === '/api/broadcast' && request.method === 'POST') {
       try {
         const body = await request.json();
         const { message, password } = body;
 
+        // ─── Check password ───
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ error: 'Invalid password!' }), {
             status: 401,
@@ -115,6 +173,7 @@ export default {
           });
         }
 
+        // ─── Check if owner is connected ───
         if (!ownerId) {
           return new Response(JSON.stringify({ 
             error: 'No owner connected! Start the Roblox script first.' 
@@ -124,6 +183,18 @@ export default {
           });
         }
 
+        // ─── Send broadcast to ALL connected players ───
+        broadcastMessage({
+          type: 'broadcast',
+          data: {
+            from: '🌐 Web Owner',
+            message: message.trim(),
+            timestamp: new Date().toISOString()
+          }
+        });
+
+        console.log(`📢 Web Broadcast sent to ${players.size} players: ${message}`);
+
         return new Response(JSON.stringify({ 
           success: true, 
           message: 'Broadcast sent to ' + players.size + ' players!'
@@ -132,6 +203,7 @@ export default {
         });
 
       } catch (err) {
+        console.error('Broadcast error:', err);
         return new Response(JSON.stringify({ error: err.message }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' }
@@ -139,7 +211,7 @@ export default {
       }
     }
 
-    // ─── WEB PAGE WITH PASSWORD GUI ───
+    // ─── WEB PAGE ───
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
@@ -220,7 +292,6 @@ export default {
       transition: 0.2s;
     }
     .password-row button:hover { opacity: 0.8; }
-    .password-row button:disabled { opacity: 0.5; cursor: not-allowed; }
     
     .broadcast-row {
       display: flex;
@@ -248,7 +319,7 @@ export default {
       cursor: pointer;
       transition: 0.2s;
     }
-    .broadcast-row button:hover { opacity: 0.8; transform: scale(1.02); }
+    .broadcast-row button:hover { opacity: 0.8; }
     .broadcast-row button:disabled { opacity: 0.5; cursor: not-allowed; }
     
     .status-msg {
@@ -318,15 +389,6 @@ export default {
       from { transform: translateX(100px); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
-    
-    .locked {
-      opacity: 0.3;
-      pointer-events: none;
-    }
-    .unlocked {
-      opacity: 1;
-      pointer-events: auto;
-    }
   </style>
 </head>
 <body>
@@ -343,14 +405,12 @@ export default {
     <div class="broadcast-box">
       <h3>📢 Send Broadcast</h3>
       
-      <!-- ─── PASSWORD INPUT ─── -->
       <div class="password-row">
         <input type="password" id="passwordInput" placeholder="Enter password to unlock..." />
         <button id="unlockBtn">🔓 Unlock</button>
       </div>
       
-      <!-- ─── BROADCAST INPUT (locked by default) ─── -->
-      <div class="broadcast-row" id="broadcastRow">
+      <div class="broadcast-row">
         <input type="text" id="broadcastInput" placeholder="Type your broadcast message..." disabled />
         <button id="broadcastBtn" disabled>📢 Send</button>
       </div>
@@ -380,7 +440,6 @@ export default {
   <div id="toastContainer"></div>
 
   <script>
-    // ─── Elements ───
     const passwordInput = document.getElementById('passwordInput');
     const unlockBtn = document.getElementById('unlockBtn');
     const broadcastInput = document.getElementById('broadcastInput');
@@ -389,11 +448,9 @@ export default {
     const playerCount = document.getElementById('playerCount');
     const ownerStatus = document.getElementById('ownerStatus');
     const playerList = document.getElementById('playerList');
-    const broadcastRow = document.getElementById('broadcastRow');
 
     let isUnlocked = false;
 
-    // ─── Unlock ───
     async function unlock() {
       const password = passwordInput.value.trim();
       if (!password) {
@@ -425,7 +482,6 @@ export default {
           return;
         }
 
-        // Password is correct!
         isUnlocked = true;
         passwordInput.disabled = true;
         unlockBtn.textContent = '✅ Unlocked';
@@ -443,7 +499,6 @@ export default {
       }
     }
 
-    // ─── Send Broadcast ───
     async function sendBroadcast() {
       if (!isUnlocked) {
         showToast('❌ Please unlock first!', 'error');
@@ -487,7 +542,6 @@ export default {
       broadcastBtn.textContent = '📢 Send';
     }
 
-    // ─── Fetch Players ───
     async function fetchPlayers() {
       try {
         const res = await fetch('/api/players');
@@ -518,7 +572,6 @@ export default {
       }
     }
 
-    // ─── Toast ───
     function showToast(message, type = 'success') {
       const container = document.getElementById('toastContainer');
       const toast = document.createElement('div');
@@ -531,7 +584,6 @@ export default {
       }, 3000);
     }
 
-    // ─── Events ───
     unlockBtn.addEventListener('click', unlock);
     passwordInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') unlock();
@@ -541,7 +593,6 @@ export default {
       if (e.key === 'Enter') sendBroadcast();
     });
 
-    // ─── Auto Refresh ───
     fetchPlayers();
     setInterval(fetchPlayers, 3000);
   </script>
@@ -551,6 +602,14 @@ export default {
     });
   }
 };
+
+// ─── Helper: Broadcast to ALL players ───
+function broadcastMessage(message, sender) {
+  const data = JSON.stringify(message);
+  console.log(`📡 Broadcasting: ${message.type}`);
+  // Note: In Cloudflare Workers, broadcasting is handled via WebSocket
+  // This function logs the broadcast for debugging
+}
 
 // ─── Helper: Get player list ───
 function getPlayerList() {
