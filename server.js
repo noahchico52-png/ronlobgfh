@@ -4,14 +4,14 @@ const WebSocket = require('ws');
 
 const app = express();
 const server = createServer(app);
-const port = process.env.PORT || 10000;
+const port = process.env.PORT || 3000; // Railway uses 3000 by default
 
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
 // ─── Store connected players ───
 const connectedPlayers = [];
 
-// ─── HTML Page ───
+// ─── HTML Page with Boxed Player Cards ───
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -19,73 +19,176 @@ app.get('/', (req, res) => {
         <head>
             <title>ZLFinder Server</title>
             <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
                 body { 
                     background: #0d0d1a; 
                     color: #e0e0e0; 
-                    font-family: Arial, sans-serif; 
+                    font-family: 'Segoe UI', Arial, sans-serif; 
                     display: flex; 
                     justify-content: center; 
                     align-items: center; 
-                    height: 100vh; 
+                    min-height: 100vh; 
                     margin: 0; 
                     flex-direction: column;
+                    padding: 20px;
                 }
-                h1 { color: #a78bfa; }
-                p { color: #9ca3af; }
+                .container {
+                    max-width: 600px;
+                    width: 100%;
+                }
+                h1 { 
+                    color: #a78bfa; 
+                    font-size: 28px;
+                    text-align: center;
+                    margin-bottom: 8px;
+                }
+                .subtitle { 
+                    color: #9ca3af; 
+                    text-align: center;
+                    font-size: 14px;
+                    margin-bottom: 20px;
+                }
                 .status { color: #22c55e; }
-                code { background: #1a1a2e; padding: 4px 8px; border-radius: 4px; }
-                .players {
-                    margin-top: 20px;
-                    background: #1a1a2e;
-                    padding: 15px 25px;
-                    border-radius: 8px;
-                    width: 400px;
-                    max-height: 200px;
-                    overflow-y: auto;
-                }
-                .players h3 { color: #a78bfa; margin-bottom: 10px; }
-                .players .player {
-                    padding: 4px 0;
-                    border-bottom: 1px solid #2d2d44;
+                code { 
+                    background: #1a1a2e; 
+                    padding: 4px 10px; 
+                    border-radius: 4px; 
                     font-size: 13px;
+                    color: #a78bfa;
                 }
-                .players .player .name { color: #4ade80; }
-                .players .player .id { color: #818cf8; }
-                .players .player .executor { color: #f472b6; }
-                .count { color: #fbbf24; font-weight: bold; }
+                .players {
+                    margin-top: 24px;
+                    background: #1a1a2e;
+                    padding: 20px 24px;
+                    border-radius: 12px;
+                    border: 1px solid #2d2d44;
+                }
+                .players h3 { 
+                    color: #a78bfa; 
+                    margin-bottom: 14px;
+                    font-size: 16px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .count { 
+                    color: #fbbf24; 
+                    font-weight: bold;
+                    background: #2d2d44;
+                    padding: 2px 12px;
+                    border-radius: 12px;
+                    font-size: 14px;
+                }
+                .player-card {
+                    background: #0d0d1a;
+                    padding: 12px 16px;
+                    border-radius: 8px;
+                    border-left: 4px solid #a78bfa;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 8px;
+                    transition: all 0.2s;
+                }
+                .player-card:hover {
+                    border-left-color: #4ade80;
+                    background: #14142a;
+                }
+                .player-card:last-child {
+                    margin-bottom: 0;
+                }
+                .player-info {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                }
+                .player-name {
+                    font-weight: bold;
+                    color: #4ade80;
+                    font-size: 15px;
+                }
+                .player-id {
+                    font-size: 12px;
+                    color: #818cf8;
+                }
+                .player-executor {
+                    background: #2d2d44;
+                    padding: 4px 14px;
+                    border-radius: 20px;
+                    font-size: 12px;
+                    color: #f472b6;
+                    font-weight: 600;
+                    white-space: nowrap;
+                }
+                .empty-message {
+                    color: #6b7280;
+                    text-align: center;
+                    padding: 20px 0;
+                    font-size: 14px;
+                }
+                .footer {
+                    margin-top: 20px;
+                    font-size: 13px;
+                    color: #6b7280;
+                    text-align: center;
+                }
+                .refresh-note {
+                    font-size: 11px;
+                    color: #4b5563;
+                    text-align: right;
+                    margin-top: 10px;
+                }
             </style>
         </head>
         <body>
-            <h1>⚡ ZLFinder WebSocket Server</h1>
-            <p>✅ Server is <span class="status">running</span></p>
-            <p>📍 WebSocket URL: <code>wss://nlfinder.onrender.com/ws</code></p>
-            
-            <div class="players">
-                <h3>👥 Connected Players (<span class="count" id="playerCount">0</span>)</h3>
-                <div id="playerList"></div>
+            <div class="container">
+                <h1>⚡ ZLFinder</h1>
+                <p class="subtitle">✅ Server <span class="status">running</span> · 📍 <code>wss://nlfinder.onrender.com/ws</code></p>
+                
+                <div class="players">
+                    <h3>
+                        👥 Connected Players
+                        <span class="count" id="playerCount">0</span>
+                    </h3>
+                    <div id="playerList">
+                        <div class="empty-message">No players connected yet</div>
+                    </div>
+                    <div class="refresh-note">🔄 Auto-refreshes every 5 seconds</div>
+                </div>
+                
+                <div class="footer">
+                    This server handles WebSocket connections for ZLFinder.
+                </div>
             </div>
-            
-            <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">
-                This server handles WebSocket connections for ZLFinder.
-            </p>
 
             <script>
-                // Auto-refresh player list every 5 seconds
                 function updatePlayers() {
                     fetch('/players')
                         .then(res => res.json())
                         .then(data => {
                             document.getElementById('playerCount').textContent = data.count;
                             const list = document.getElementById('playerList');
-                            list.innerHTML = data.players.map(p => 
-                                '<div class="player">' +
-                                '👤 <span class="name">' + p.name + '</span> ' +
-                                '🆔 <span class="id">' + p.userId + '</span> ' +
-                                '⚡ <span class="executor">' + (p.executor || 'Unknown') + '</span>' +
-                                '</div>'
-                            ).join('');
+                            
+                            if (data.players.length === 0) {
+                                list.innerHTML = '<div class="empty-message">No players connected yet</div>';
+                                return;
+                            }
+                            
+                            list.innerHTML = data.players.map(p => `
+                                <div class="player-card">
+                                    <div class="player-info">
+                                        <div class="player-name">👤 ${p.name || 'Unknown'}</div>
+                                        <div class="player-id">🆔 ${p.userId || 'Unknown'}</div>
+                                    </div>
+                                    <div class="player-executor">⚡ ${p.executor || 'Unknown'}</div>
+                                </div>
+                            `).join('');
+                        })
+                        .catch(() => {
+                            // Silently fail if server not ready
                         });
                 }
+                
                 updatePlayers();
                 setInterval(updatePlayers, 5000);
             </script>
@@ -111,7 +214,6 @@ app.get('/health', (req, res) => {
 wss.on('connection', (ws) => {
     console.log('✅ Client connected!');
     
-    // Add to connected players list
     const playerInfo = {
         name: 'Unknown',
         userId: 'Unknown',
@@ -120,7 +222,6 @@ wss.on('connection', (ws) => {
     };
     connectedPlayers.push(playerInfo);
     
-    // Send welcome message
     ws.send(JSON.stringify({
         type: 'connected',
         message: 'Connected to ZLFinder server!'
@@ -131,9 +232,7 @@ wss.on('connection', (ws) => {
             const data = JSON.parse(message);
             console.log('📩 Received:', data);
             
-            // ─── Check for player info ───
             if (data.type === 'player_info') {
-                // Update the player's info
                 const info = data.data;
                 const idx = connectedPlayers.indexOf(playerInfo);
                 if (idx !== -1) {
@@ -146,7 +245,6 @@ wss.on('connection', (ws) => {
                     console.log(`👤 Player: ${info.name} (${info.userId}) - Executor: ${info.executor}`);
                 }
                 
-                // Broadcast to all clients that a player joined
                 wss.clients.forEach(client => {
                     if (client !== ws && client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify({
@@ -160,7 +258,6 @@ wss.on('connection', (ws) => {
                     }
                 });
                 
-                // Send back confirmation
                 ws.send(JSON.stringify({
                     type: 'player_info_received',
                     data: { 
@@ -168,10 +265,7 @@ wss.on('connection', (ws) => {
                         timestamp: Date.now()
                     }
                 }));
-            }
-            
-            // ─── Echo back other messages ───
-            else {
+            } else {
                 ws.send(JSON.stringify({
                     type: 'echo',
                     data: data
@@ -179,7 +273,6 @@ wss.on('connection', (ws) => {
             }
             
         } catch (err) {
-            // Plain text message
             console.log('📩 Plain:', message.toString());
             ws.send(`Echo: ${message}`);
         }
@@ -187,7 +280,6 @@ wss.on('connection', (ws) => {
     
     ws.on('close', () => {
         console.log('❌ Client disconnected');
-        // Remove from connected players
         const idx = connectedPlayers.indexOf(playerInfo);
         if (idx !== -1) {
             const removed = connectedPlayers.splice(idx, 1)[0];
