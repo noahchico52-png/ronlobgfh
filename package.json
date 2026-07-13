@@ -1,8 +1,12 @@
 {
-  "name": "zlfinder-websocket",
+  "name": "server-control",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "deploy": "wrangler deploy"
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
   }
 }
