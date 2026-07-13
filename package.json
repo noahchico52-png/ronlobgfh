@@ -1,7 +1,6 @@
 {
   "name": "zlfinder-websocket",
   "version": "1.0.0",
-  "description": "ZLFinder WebSocket Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
