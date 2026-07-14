@@ -13,7 +13,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": ["ZLFinderDO"]
+      "new_sqlite_classes": ["ZLFinderDO"]
     }
   ],
   "env": {
