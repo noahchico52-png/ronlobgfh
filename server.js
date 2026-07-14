@@ -1,10 +1,17 @@
-// server.js - WORKING KICK
-const players = new Map();
+// server.js - With Durable Objects (KICK WORKS!)
 
-export default {
-  async fetch(request, env) {
+// ─── DURABLE OBJECT ───
+export class ZLFinderDO {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.players = new Map();
+    this.sessions = new Map();
+  }
+
+  async fetch(request) {
     const url = new URL(request.url);
-    const SECRET_KEY = env.SECRET_KEY || "MewVantaIsTheBest";
+    const SECRET_KEY = this.env.SECRET_KEY || "MewVantaIsTheBest";
 
     // ─── WEBSOCKET ───
     if (url.pathname === '/ws') {
@@ -21,6 +28,10 @@ export default {
       let playerId = null;
       let playerName = 'Unknown';
 
+      // ─── Store WebSocket reference ───
+      const sessionId = crypto.randomUUID();
+      this.sessions.set(sessionId, server);
+
       server.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -31,18 +42,17 @@ export default {
             playerId = info.userId || crypto.randomUUID();
             playerName = info.name || 'Unknown';
 
-            // ─── STORE PLAYER WITH WEBSOCKET ───
-            players.set(playerId, {
+            this.players.set(playerId, {
               name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
               isOwner: info.isOwner || false,
               connectedAt: new Date().toISOString(),
-              ws: server  // <--- THIS IS CRITICAL
+              sessionId: sessionId
             });
 
-            console.log(`👤 Player stored: ${playerName} (${playerId})`);
-            console.log(`📊 Total players: ${players.size}`);
+            console.log(`👤 Player stored: ${playerName}`);
+            console.log(`📊 Total players: ${this.players.size}`);
 
             server.send(JSON.stringify({
               type: 'player_info_received',
@@ -64,10 +74,11 @@ export default {
 
       server.addEventListener('close', () => {
         if (playerId) {
-          players.delete(playerId);
+          this.players.delete(playerId);
           console.log(`👋 ${playerName} disconnected`);
-          console.log(`📊 Total players: ${players.size}`);
+          console.log(`📊 Total players: ${this.players.size}`);
         }
+        this.sessions.delete(sessionId);
       });
 
       return new Response(null, { status: 101, webSocket: client });
@@ -76,7 +87,7 @@ export default {
     // ─── API: GET PLAYERS ───
     if (url.pathname === '/api/players') {
       const list = [];
-      for (const [id, player] of players) {
+      for (const [id, player] of this.players) {
         list.push({
           name: player.name,
           userId: player.userId,
@@ -85,7 +96,6 @@ export default {
           connectedAt: player.connectedAt
         });
       }
-      console.log(`📊 Returning ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -121,21 +131,19 @@ export default {
 
         // ─── FIND THE PLAYER ───
         let targetId = null;
-        let targetWs = null;
+        let targetSessionId = null;
         let targetName = null;
 
-        for (const [id, data] of players) {
+        for (const [id, data] of this.players) {
           if (data.name === playerName) {
             targetId = id;
-            targetWs = data.ws;
+            targetSessionId = data.sessionId;
             targetName = data.name;
-            console.log(`👢 Found player: ${targetName}`);
             break;
           }
         }
 
-        if (!targetWs) {
-          console.log(`❌ Player "${playerName}" not found!`);
+        if (!targetSessionId) {
           return new Response(JSON.stringify({ 
             success: false, 
             message: `Player "${playerName}" not found!` 
@@ -145,18 +153,29 @@ export default {
           });
         }
 
+        // ─── GET THE WEBSOCKET ───
+        const targetWs = this.sessions.get(targetSessionId);
+        if (!targetWs) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: `Player "${playerName}" has no active WebSocket!` 
+          }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
         // ─── SEND KICK MESSAGE ───
         try {
-          const kickMessage = JSON.stringify({
+          targetWs.send(JSON.stringify({
             type: 'kick',
             data: {
               message: 'You have been kicked by the server owner!'
             }
-          });
-          targetWs.send(kickMessage);
+          }));
           console.log(`👢✅ Sent kick to: ${targetName}`);
         } catch (err) {
-          console.error(`❌ Failed to send kick to ${targetName}:`, err);
+          console.error(`❌ Failed to send kick:`, err);
           return new Response(JSON.stringify({ 
             success: false, 
             message: 'Failed to send kick: ' + err.message 
@@ -167,8 +186,7 @@ export default {
         }
 
         // ─── REMOVE PLAYER ───
-        players.delete(targetId);
-        console.log(`👢✅ Kicked: ${targetName}`);
+        this.players.delete(targetId);
 
         return new Response(JSON.stringify({ 
           success: true, 
@@ -179,148 +197,6 @@ export default {
 
       } catch (err) {
         console.error('Kick error:', err);
-        return new Response(JSON.stringify({ 
-          success: false, 
-          message: 'Error: ' + err.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // ─── API: EXECUTE ───
-    if (url.pathname === '/api/execute' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const { code, password } = body;
-
-        if (!password || password !== SECRET_KEY) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Invalid password!' 
-          }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        if (!code || code.trim() === '') {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Code required!' 
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        let sent = 0;
-        for (const [id, data] of players) {
-          try {
-            if (data.ws) {
-              data.ws.send(code);
-              sent++;
-            }
-          } catch (err) {}
-        }
-
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: `✅ Code sent to ${sent} players!` 
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-      } catch (err) {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          message: 'Error: ' + err.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // ─── API: PRINT ───
-    if (url.pathname === '/api/print' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const { password } = body;
-
-        if (!password || password !== SECRET_KEY) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Invalid password!' 
-          }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        let sent = 0;
-        for (const [id, data] of players) {
-          try {
-            if (data.ws) {
-              data.ws.send("print('🖨️ Print from web!')");
-              sent++;
-            }
-          } catch (err) {}
-        }
-
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: `✅ "print" sent to ${sent} players!` 
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-      } catch (err) {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          message: 'Error: ' + err.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // ─── API: ALL ───
-    if (url.pathname === '/api/all' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const { password } = body;
-
-        if (!password || password !== SECRET_KEY) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Invalid password!' 
-          }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        let sent = 0;
-        for (const [id, data] of players) {
-          try {
-            if (data.ws) {
-              data.ws.send("print('📢 All command from web!')");
-              sent++;
-            }
-          } catch (err) {}
-        }
-
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: `✅ "all" sent to ${sent} players!` 
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-      } catch (err) {
         return new Response(JSON.stringify({ 
           success: false, 
           message: 'Error: ' + err.message 
@@ -408,7 +284,6 @@ export default {
       try {
         const res = await fetch('/api/players');
         const data = await res.json();
-        console.log('📊 Players:', data);
         document.getElementById('playerCount').textContent = data.length;
         const owner = data.find(p => p.isOwner);
         document.getElementById('ownerStatus').textContent = owner ? owner.name : 'None';
@@ -425,6 +300,25 @@ export default {
           </div>
         \`).join('');
       } catch(e) { console.error('Fetch error:', e); }
+    }
+
+    async function kickPlayer(name) {
+      if (!confirm(\`Kick player: \${name}?\`)) return;
+      const password = prompt('Enter password:');
+      if (!password) return;
+
+      try {
+        const res = await fetch('/api/kick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerName: name, password: password })
+        });
+        const data = await res.json();
+        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        fetchPlayers();
+      } catch(e) {
+        showToast('❌ Error: ' + e.message, 'error');
+      }
     }
 
     async function sendCode() {
@@ -465,20 +359,23 @@ export default {
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/kick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: name, password }) });
+        const res = await fetch('/api/kick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: name, password: password }) });
         const data = await res.json();
         showToast(data.message, res.ok ? 'success' : 'error');
         fetchPlayers();
       } catch(e) { showToast('❌ Error', 'error'); }
     }
 
-    function showToast(message, type) {
+    function showToast(message, type = 'success') {
       const container = document.getElementById('toastContainer');
       const toast = document.createElement('div');
       toast.className = 'toast ' + type;
       toast.textContent = message;
       container.appendChild(toast);
-      setTimeout(() => toast.remove(), 3000);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
     }
 
     fetchPlayers();
@@ -488,5 +385,17 @@ export default {
 </html>`, {
       headers: { 'Content-Type': 'text/html; charset=UTF-8' }
     });
+  }
+}
+
+// ─── MAIN WORKER ───
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    
+    // ─── Route all requests to the Durable Object ───
+    const id = env.ZLFINDER.idFromName('zlfinder');
+    const stub = env.ZLFINDER.get(id);
+    return stub.fetch(request);
   }
 };
