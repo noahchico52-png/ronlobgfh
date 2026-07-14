@@ -1,4 +1,4 @@
-// server.js - FIXED WEB PAGE
+// server.js - SIMPLE WORKING WEB PAGE
 
 const players = new Map();
 
@@ -309,22 +309,19 @@ export default {
       }
     }
 
-    // ─── WEB PAGE ───
+    // ─── SIMPLE WEB PAGE ───
     return new Response(`<!DOCTYPE html>
 <html>
 <head>
   <title>Server Control</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0d0d1a; color: #e0e0e0; font-family: Arial; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-    .container { background: #1a1a2e; padding: 30px; border-radius: 20px; max-width: 700px; width: 100%; }
+    body { background: #0d0d1a; color: #e0e0e0; font-family: Arial; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+    .container { background: #1a1a2e; padding: 30px; border-radius: 20px; max-width: 600px; width: 100%; }
     h1 { color: #a78bfa; }
     .status { background: #22c55e; color: #fff; padding: 4px 16px; border-radius: 20px; display: inline-block; }
     .url-box { background: #0d0d1a; padding: 10px; border-radius: 8px; margin: 10px 0; border: 1px solid #2d2d44; }
     .url-box code { color: #fbbf24; }
-    textarea { width: 100%; height: 120px; background: #0d0d1a; color: #e0e0e0; border: 1px solid #2d2d44; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 14px; resize: vertical; }
-    textarea:focus { border-color: #a78bfa; outline: none; }
-    .player { background: #0d0d1a; padding: 10px; border-radius: 8px; margin: 5px 0; display: flex; justify-content: space-between; align-items: center; border-left: 3px solid #4ade80; }
+    .player { background: #0d0d1a; padding: 10px; border-radius: 8px; margin: 5px 0; border-left: 3px solid #4ade80; }
     .empty { color: #6b7280; text-align: center; padding: 20px; }
     .stats { display: flex; gap: 20px; margin: 15px 0; }
     .stat-box { background: #0d0d1a; padding: 12px; border-radius: 10px; text-align: center; border: 1px solid #2d2d44; flex: 1; }
@@ -333,20 +330,15 @@ export default {
     .btn-row { display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
     .btn-row button { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; min-width: 80px; }
     .btn-execute { background: #22c55e; color: #fff; }
-    .btn-execute:hover { opacity: 0.8; }
     .btn-print { background: #3b82f6; color: #fff; }
-    .btn-print:hover { opacity: 0.8; }
     .btn-all { background: #8b5cf6; color: #fff; }
-    .btn-all:hover { opacity: 0.8; }
     .btn-kick { background: #ef4444; color: #fff; }
-    .btn-kick:hover { opacity: 0.8; }
     .footer { margin-top: 20px; font-size: 12px; color: #4b5563; text-align: center; }
     .toast {
-      position: fixed; top: 20px; right: 20px; background: #1a1a2e; padding: 16px 24px; border-radius: 12px; border: 1px solid #2d2d44; animation: slideIn 0.3s ease; z-index: 999;
+      position: fixed; top: 20px; right: 20px; background: #1a1a2e; padding: 16px 24px; border-radius: 12px; border: 1px solid #2d2d44; z-index: 999;
     }
     .toast.success { border-color: #22c55e; }
     .toast.error { border-color: #ef4444; }
-    @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   </style>
 </head>
 <body>
@@ -360,10 +352,10 @@ export default {
       <div class="stat-box"><div class="num" id="ownerStatus">-</div><div class="label">👑 Owner</div></div>
     </div>
 
-    <div id="playerList"><div class="empty">No players connected</div></div>
+    <div id="playerList"><div class="empty">Loading...</div></div>
 
     <h3 style="color: #9ca3af; margin: 10px 0;">📝 Enter Lua Code:</h3>
-    <textarea id="codeInput">print("Hello from web!")</textarea>
+    <textarea id="codeInput" style="width:100%;height:120px;background:#0d0d1a;color:#e0e0e0;border:1px solid #2d2d44;border-radius:8px;padding:10px;font-family:monospace;font-size:14px;">print("Hello from web!")</textarea>
 
     <div class="btn-row">
       <button class="btn-execute" onclick="sendCode()">▶️ Execute</button>
@@ -384,7 +376,7 @@ export default {
       try {
         const res = await fetch('/api/players');
         const data = await res.json();
-        console.log('📊 Players:', data);
+        console.log('📊 Data:', data);
         document.getElementById('playerCount').textContent = data.length;
         const owner = data.find(p => p.isOwner);
         document.getElementById('ownerStatus').textContent = owner ? owner.name : 'None';
@@ -395,30 +387,25 @@ export default {
           return;
         }
         list.innerHTML = data.map(p => \`
-          <div class="player">
-            <span>👤 \${p.name} \${p.isOwner ? '👑' : ''} 🆔 \${p.userId} ⚡ \${p.executor}</span>
-          </div>
+          <div class="player">👤 \${p.name} \${p.isOwner ? '👑' : ''} 🆔 \${p.userId} ⚡ \${p.executor}</div>
         \`).join('');
       } catch(e) { console.error('Fetch error:', e); }
     }
 
     async function sendCode() {
       const code = document.getElementById('codeInput').value;
-      if (!code) {
-        showToast('❌ Please enter some code!', 'error');
-        return;
-      }
+      if (!code) return showToast('❌ Enter code!', 'error');
       const password = prompt('Enter password:');
       if (!password) return;
       try {
         const res = await fetch('/api/execute', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: code, password: password })
+          body: JSON.stringify({ code, password })
         });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Executed!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendPrint() {
@@ -428,11 +415,11 @@ export default {
         const res = await fetch('/api/print', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: password })
+          body: JSON.stringify({ password })
         });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Sent!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendAll() {
@@ -442,11 +429,11 @@ export default {
         const res = await fetch('/api/all', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: password })
+          body: JSON.stringify({ password })
         });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Sent!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendKick() {
@@ -458,27 +445,23 @@ export default {
         const res = await fetch('/api/kick', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerName: name, password: password })
+          body: JSON.stringify({ playerName: name, password })
         });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        showToast(data.message, res.ok ? 'success' : 'error');
         fetchPlayers();
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
-    function showToast(message, type = 'success') {
+    function showToast(message, type) {
       const container = document.getElementById('toastContainer');
       const toast = document.createElement('div');
       toast.className = 'toast ' + type;
       toast.textContent = message;
       container.appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
+      setTimeout(() => toast.remove(), 3000);
     }
 
-    // ─── INIT ───
     fetchPlayers();
     setInterval(fetchPlayers, 3000);
   </script>
