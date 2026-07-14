@@ -2,7 +2,20 @@
   "name": "zlfinder-websocket",
   "main": "server.js",
   "compatibility_date": "2024-12-18",
-  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ZLFINDER",
+        "class_name": "ZLFinderDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["ZLFinderDO"]
+    }
+  ],
   "env": {
     "production": {
       "vars": {
