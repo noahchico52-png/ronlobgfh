@@ -1,6 +1,4 @@
-// server.js - Complete Server with All Features
-// Features: Player Tracking, Execute Code, Print, All, Kick, Auto-Remove on Disconnect
-
+// server.js - WORKING KICK
 const players = new Map();
 
 export default {
@@ -21,20 +19,7 @@ export default {
       console.log('✅ Client connected!');
 
       let playerId = null;
-      let pingInterval = null;
-
-      // ─── PING/HEARTBEAT ───
-      pingInterval = setInterval(() => {
-        try {
-          if (server.readyState === 1) { // OPEN
-            server.send('ping');
-          } else {
-            clearInterval(pingInterval);
-          }
-        } catch (err) {
-          clearInterval(pingInterval);
-        }
-      }, 30000);
+      let playerName = 'Unknown';
 
       server.addEventListener('message', (event) => {
         try {
@@ -44,24 +29,24 @@ export default {
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
+            playerName = info.name || 'Unknown';
 
+            // ─── STORE PLAYER WITH WEBSOCKET ───
             players.set(playerId, {
-              name: info.name || 'Unknown',
+              name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
               isOwner: info.isOwner || false,
               connectedAt: new Date().toISOString(),
-              ws: server
+              ws: server  // <--- THIS IS CRITICAL
             });
 
-            console.log(`👤 Player stored: ${info.name}`);
+            console.log(`👤 Player stored: ${playerName} (${playerId})`);
             console.log(`📊 Total players: ${players.size}`);
 
             server.send(JSON.stringify({
               type: 'player_info_received',
-              data: {
-                message: `Welcome ${info.name}!`
-              }
+              data: { message: `Welcome ${playerName}!` }
             }));
             return;
           }
@@ -77,22 +62,11 @@ export default {
         }
       });
 
-      // ─── DISCONNECT ───
       server.addEventListener('close', () => {
-        clearInterval(pingInterval);
         if (playerId) {
           players.delete(playerId);
-          console.log(`👋 Player disconnected`);
+          console.log(`👋 ${playerName} disconnected`);
           console.log(`📊 Total players: ${players.size}`);
-        }
-      });
-
-      // ─── ERROR ───
-      server.addEventListener('error', () => {
-        clearInterval(pingInterval);
-        if (playerId) {
-          players.delete(playerId);
-          console.log(`❌ Connection error - removed player`);
         }
       });
 
@@ -111,12 +85,111 @@ export default {
           connectedAt: player.connectedAt
         });
       }
+      console.log(`📊 Returning ${list.length} players`);
       return new Response(JSON.stringify(list), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    // ─── API: EXECUTE CODE ───
+    // ─── API: KICK ───
+    if (url.pathname === '/api/kick' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { playerName, password } = body;
+
+        console.log(`👢 Kick request for: ${playerName}`);
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!playerName) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Player name required!' 
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        // ─── FIND THE PLAYER ───
+        let targetId = null;
+        let targetWs = null;
+        let targetName = null;
+
+        for (const [id, data] of players) {
+          if (data.name === playerName) {
+            targetId = id;
+            targetWs = data.ws;
+            targetName = data.name;
+            console.log(`👢 Found player: ${targetName}`);
+            break;
+          }
+        }
+
+        if (!targetWs) {
+          console.log(`❌ Player "${playerName}" not found!`);
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: `Player "${playerName}" not found!` 
+          }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        // ─── SEND KICK MESSAGE ───
+        try {
+          const kickMessage = JSON.stringify({
+            type: 'kick',
+            data: {
+              message: 'You have been kicked by the server owner!'
+            }
+          });
+          targetWs.send(kickMessage);
+          console.log(`👢✅ Sent kick to: ${targetName}`);
+        } catch (err) {
+          console.error(`❌ Failed to send kick to ${targetName}:`, err);
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Failed to send kick: ' + err.message 
+          }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        // ─── REMOVE PLAYER ───
+        players.delete(targetId);
+        console.log(`👢✅ Kicked: ${targetName}`);
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          message: `✅ Kicked: ${targetName}` 
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
+        console.error('Kick error:', err);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ─── API: EXECUTE ───
     if (url.pathname === '/api/execute' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -190,7 +263,6 @@ export default {
         for (const [id, data] of players) {
           try {
             if (data.ws) {
-              // Send plain text Lua code
               data.ws.send("print('🖨️ Print from web!')");
               sent++;
             }
@@ -244,84 +316,6 @@ export default {
         return new Response(JSON.stringify({ 
           success: true, 
           message: `✅ "all" sent to ${sent} players!` 
-        }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-      } catch (err) {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          message: 'Error: ' + err.message 
-        }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    }
-
-    // ─── API: KICK ───
-    if (url.pathname === '/api/kick' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const { playerName, password } = body;
-
-        if (!password || password !== SECRET_KEY) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Invalid password!' 
-          }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        if (!playerName) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: 'Player name required!' 
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        let targetId = null;
-        let targetWs = null;
-        let targetName = null;
-
-        for (const [id, data] of players) {
-          if (data.name === playerName) {
-            targetId = id;
-            targetWs = data.ws;
-            targetName = data.name;
-            break;
-          }
-        }
-
-        if (!targetWs) {
-          return new Response(JSON.stringify({ 
-            success: false, 
-            message: `Player "${playerName}" not found!` 
-          }), {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
-          });
-        }
-
-        try {
-          targetWs.send(JSON.stringify({
-            type: 'kick',
-            data: {
-              message: 'You have been kicked by the server owner!'
-            }
-          }));
-        } catch (err) {}
-
-        players.delete(targetId);
-
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: `✅ Kicked: ${targetName}` 
         }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -435,49 +429,34 @@ export default {
 
     async function sendCode() {
       const code = document.getElementById('codeInput').value;
-      if (!code) {
-        showToast('❌ Please enter some code!', 'error');
-        return;
-      }
+      if (!code) { showToast('❌ Enter code!', 'error'); return; }
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: code, password: password })
-        });
+        const res = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, password }) });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Executed!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendPrint() {
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/print', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: password })
-        });
+        const res = await fetch('/api/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Sent!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendAll() {
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: password })
-        });
+        const res = await fetch('/api/all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Sent!' : '❌ Failed'), res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+        showToast(data.message, res.ok ? 'success' : 'error');
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
     async function sendKick() {
@@ -486,27 +465,20 @@ export default {
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/kick', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerName: name, password: password })
-        });
+        const res = await fetch('/api/kick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: name, password }) });
         const data = await res.json();
-        showToast(data.message || (res.ok ? '✅ Kicked!' : '❌ Failed'), res.ok ? 'success' : 'error');
+        showToast(data.message, res.ok ? 'success' : 'error');
         fetchPlayers();
-      } catch(e) { showToast('❌ Error: ' + e.message, 'error'); }
+      } catch(e) { showToast('❌ Error', 'error'); }
     }
 
-    function showToast(message, type = 'success') {
+    function showToast(message, type) {
       const container = document.getElementById('toastContainer');
       const toast = document.createElement('div');
       toast.className = 'toast ' + type;
       toast.textContent = message;
       container.appendChild(toast);
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
+      setTimeout(() => toast.remove(), 3000);
     }
 
     fetchPlayers();
