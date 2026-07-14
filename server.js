@@ -1,5 +1,4 @@
-// server.js - COMPLETE FIXED VERSION
-
+// server.js - ULTRA DEBUG VERSION
 const players = new Map();
 
 export default {
@@ -17,47 +16,51 @@ export default {
       const [client, server] = Object.values(new WebSocketPair());
       server.accept();
 
-      console.log('✅ Client connected!');
+      console.log('✅ [WS] Client connected!');
 
       let playerId = null;
+      let playerName = 'Unknown';
 
       server.addEventListener('message', (event) => {
         try {
-          const data = JSON.parse(event.data);
-          console.log('📩 Received:', data.type);
+          const rawData = event.data;
+          console.log(`📩 [WS] Raw message: ${rawData}`);
+          const data = JSON.parse(rawData);
+          console.log(`📩 [WS] Parsed type: ${data.type}`);
 
           if (data.type === 'player_info') {
             const info = data.data;
             playerId = info.userId || crypto.randomUUID();
+            playerName = info.name || 'Unknown';
 
-            players.set(playerId, {
-              name: info.name || 'Unknown',
+            // Store the player with the WebSocket reference
+            const playerData = {
+              name: playerName,
               userId: playerId,
               executor: info.executor || 'Unknown',
               isOwner: info.isOwner || false,
               connectedAt: new Date().toISOString(),
               ws: server
-            });
+            };
+            players.set(playerId, playerData);
+            console.log(`👤 [WS] Player stored: ${playerName} (${playerId})`);
+            console.log(`📊 [WS] Total players: ${players.size}`);
 
-            console.log(`👤 Player stored: ${info.name}`);
-            console.log(`📊 Total players: ${players.size}`);
-
-            server.send(JSON.stringify({
+            // Send confirmation back to the client
+            const confirmMsg = JSON.stringify({
               type: 'player_info_received',
-              data: {
-                message: `Welcome ${info.name}!`
-              }
-            }));
+              data: { message: `Welcome ${playerName}!` }
+            });
+            server.send(confirmMsg);
+            console.log(`📤 [WS] Sent confirmation to ${playerName}`);
             return;
           }
 
-          server.send(JSON.stringify({
-            type: 'echo',
-            data: data
-          }));
+          // Echo back any other message
+          server.send(JSON.stringify({ type: 'echo', data: data }));
 
         } catch (err) {
-          console.log('📩 Plain message:', event.data);
+          console.log(`📩 [WS] Plain message or error: ${event.data}`);
           server.send(`Echo: ${event.data}`);
         }
       });
@@ -65,14 +68,17 @@ export default {
       server.addEventListener('close', () => {
         if (playerId) {
           players.delete(playerId);
-          console.log(`📊 Total players: ${players.size}`);
+          console.log(`👋 [WS] ${playerName} (${playerId}) disconnected`);
+          console.log(`📊 [WS] Total players remaining: ${players.size}`);
+        } else {
+          console.log(`👋 [WS] An unnamed client disconnected`);
         }
       });
 
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // ─── API: GET PLAYERS ───
+    // ─── API: GET PLAYERS (WITH DEBUG INFO) ───
     if (url.pathname === '/api/players') {
       const list = [];
       for (const [id, player] of players) {
@@ -84,8 +90,16 @@ export default {
           connectedAt: player.connectedAt
         });
       }
-      console.log(`📊 Returning ${list.length} players`);
-      return new Response(JSON.stringify(list), {
+      const response = {
+        players: list,
+        count: list.length,
+        debug: {
+          mapSize: players.size,
+          keys: Array.from(players.keys())
+        }
+      };
+      console.log(`📊 [API] Returning ${list.length} players`);
+      return new Response(JSON.stringify(response), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -95,8 +109,6 @@ export default {
       try {
         const body = await request.json();
         const { code, password } = body;
-
-        console.log(`📤 Execute request from: ${body.player || 'unknown'}`);
 
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ 
@@ -124,7 +136,7 @@ export default {
             if (data.ws) {
               data.ws.send(code);
               sent++;
-              console.log(`📤 Sent code to: ${data.name}`);
+              console.log(`📤 [API] Sent code to: ${data.name}`);
             }
           } catch (err) {
             console.error(`Failed to send to ${data.name}:`, err);
@@ -139,7 +151,6 @@ export default {
         });
 
       } catch (err) {
-        console.error('Execute error:', err);
         return new Response(JSON.stringify({ 
           success: false, 
           message: 'Error: ' + err.message 
@@ -391,22 +402,25 @@ export default {
       try {
         const res = await fetch('/api/players');
         const data = await res.json();
-        document.getElementById('playerCount').textContent = data.length;
-        const owner = data.find(p => p.isOwner);
+        console.log('📊 [WEB] API Response:', data);
+        document.getElementById('playerCount').textContent = data.count || 0;
+        const owner = data.players ? data.players.find(p => p.isOwner) : null;
         document.getElementById('ownerStatus').textContent = owner ? owner.name : 'None';
 
         const list = document.getElementById('playerList');
-        if (data.length === 0) {
+        if (!data.players || data.players.length === 0) {
           list.innerHTML = '<div class="empty">No players connected</div>';
           return;
         }
-        list.innerHTML = data.map(p => \`
+        list.innerHTML = data.players.map(p => \`
           <div class="player">
             <span>👤 \${p.name} \${p.isOwner ? '👑' : ''} 🆔 \${p.userId} ⚡ \${p.executor}</span>
           </div>
         \`).join('');
       } catch(e) { console.error('Fetch error:', e); }
     }
+
+    // ... (rest of the send functions are the same as before)
 
     async function sendCode() {
       const code = document.getElementById('codeInput').value;
