@@ -1,4 +1,4 @@
-// server.js - With Durable Objects (KICK WORKS!)
+// server.js - Clean Version with Durable Objects (No Print/All)
 
 // ─── DURABLE OBJECT ───
 export class ZLFinderDO {
@@ -27,8 +27,6 @@ export class ZLFinderDO {
 
       let playerId = null;
       let playerName = 'Unknown';
-
-      // ─── Store WebSocket reference ───
       const sessionId = crypto.randomUUID();
       this.sessions.set(sessionId, server);
 
@@ -107,8 +105,6 @@ export class ZLFinderDO {
         const body = await request.json();
         const { playerName, password } = body;
 
-        console.log(`👢 Kick request for: ${playerName}`);
-
         if (!password || password !== SECRET_KEY) {
           return new Response(JSON.stringify({ 
             success: false, 
@@ -129,7 +125,6 @@ export class ZLFinderDO {
           });
         }
 
-        // ─── FIND THE PLAYER ───
         let targetId = null;
         let targetSessionId = null;
         let targetName = null;
@@ -153,7 +148,6 @@ export class ZLFinderDO {
           });
         }
 
-        // ─── GET THE WEBSOCKET ───
         const targetWs = this.sessions.get(targetSessionId);
         if (!targetWs) {
           return new Response(JSON.stringify({ 
@@ -165,7 +159,6 @@ export class ZLFinderDO {
           });
         }
 
-        // ─── SEND KICK MESSAGE ───
         try {
           targetWs.send(JSON.stringify({
             type: 'kick',
@@ -175,7 +168,6 @@ export class ZLFinderDO {
           }));
           console.log(`👢✅ Sent kick to: ${targetName}`);
         } catch (err) {
-          console.error(`❌ Failed to send kick:`, err);
           return new Response(JSON.stringify({ 
             success: false, 
             message: 'Failed to send kick: ' + err.message 
@@ -185,7 +177,6 @@ export class ZLFinderDO {
           });
         }
 
-        // ─── REMOVE PLAYER ───
         this.players.delete(targetId);
 
         return new Response(JSON.stringify({ 
@@ -196,7 +187,62 @@ export class ZLFinderDO {
         });
 
       } catch (err) {
-        console.error('Kick error:', err);
+        return new Response(JSON.stringify({ 
+          success: false, 
+          message: 'Error: ' + err.message 
+        }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // ─── API: EXECUTE CODE ───
+    if (url.pathname === '/api/execute' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { code, password } = body;
+
+        if (!password || password !== SECRET_KEY) {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Invalid password!' 
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+
+        if (!code || code.trim() === '') {
+          return new Response(JSON.stringify({ 
+            success: false, 
+            message: 'Code required!' 
+          }), {
+            status: 400,
+          });
+        }
+
+        let sent = 0;
+        for (const [id, data] of this.players) {
+          try {
+            if (data.sessionId) {
+              const ws = this.sessions.get(data.sessionId);
+              if (ws) {
+                ws.send(code);
+                sent++;
+              }
+            }
+          } catch (err) {}
+        }
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          message: `✅ Code sent to ${sent} players!` 
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+      } catch (err) {
         return new Response(JSON.stringify({ 
           success: false, 
           message: 'Error: ' + err.message 
@@ -222,24 +268,42 @@ export class ZLFinderDO {
     .url-box code { color: #fbbf24; }
     textarea { width: 100%; height: 120px; background: #0d0d1a; color: #e0e0e0; border: 1px solid #2d2d44; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 14px; resize: vertical; }
     textarea:focus { border-color: #a78bfa; outline: none; }
-    .player { background: #0d0d1a; padding: 10px; border-radius: 8px; margin: 5px 0; display: flex; justify-content: space-between; align-items: center; border-left: 3px solid #4ade80; }
-    .player .kick-btn { background: #ef4444; color: #fff; border: none; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: bold; }
-    .player .kick-btn:hover { opacity: 0.8; }
+    .player { 
+      background: #0d0d1a; 
+      padding: 10px 16px; 
+      border-radius: 8px; 
+      margin: 5px 0; 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      border-left: 3px solid #4ade80; 
+    }
+    .player .info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .player .name { color: #4ade80; font-weight: bold; }
+    .player .id { color: #818cf8; font-size: 12px; }
+    .player .executor { background: #2d2d44; padding: 2px 12px; border-radius: 12px; font-size: 11px; color: #f472b6; }
+    .player .owner-badge { color: #fbbf24; font-size: 12px; }
+    .player .kick-btn { 
+      background: #ef4444; 
+      color: #fff; 
+      border: none; 
+      padding: 4px 14px; 
+      border-radius: 6px; 
+      cursor: pointer; 
+      font-size: 11px; 
+      font-weight: bold; 
+      flex-shrink: 0;
+    }
+    .player .kick-btn:hover { opacity: 0.8; transform: scale(1.02); }
     .empty { color: #6b7280; text-align: center; padding: 20px; }
     .stats { display: flex; gap: 20px; margin: 15px 0; }
     .stat-box { background: #0d0d1a; padding: 12px; border-radius: 10px; text-align: center; border: 1px solid #2d2d44; flex: 1; }
     .stat-box .num { font-size: 24px; font-weight: bold; color: #a78bfa; }
     .stat-box .label { font-size: 12px; color: #6b7280; }
-    .btn-row { display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
+    .btn-row { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
     .btn-row button { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; min-width: 80px; }
     .btn-execute { background: #22c55e; color: #fff; }
     .btn-execute:hover { opacity: 0.8; }
-    .btn-print { background: #3b82f6; color: #fff; }
-    .btn-print:hover { opacity: 0.8; }
-    .btn-all { background: #8b5cf6; color: #fff; }
-    .btn-all:hover { opacity: 0.8; }
-    .btn-kick { background: #ef4444; color: #fff; }
-    .btn-kick:hover { opacity: 0.8; }
     .footer { margin-top: 20px; font-size: 12px; color: #4b5563; text-align: center; }
     .toast {
       position: fixed; top: 20px; right: 20px; background: #1a1a2e; padding: 16px 24px; border-radius: 12px; border: 1px solid #2d2d44; animation: slideIn 0.3s ease; z-index: 999;
@@ -262,14 +326,11 @@ export class ZLFinderDO {
 
     <div id="playerList"><div class="empty">No players connected</div></div>
 
-    <h3 style="color: #9ca3af; margin: 10px 0;">📝 Enter Lua Code:</h3>
+    <h3 style="color: #9ca3af; margin: 10px 0 5px 0;">📝 Enter Lua Code:</h3>
     <textarea id="codeInput">print("Hello from web!")</textarea>
 
     <div class="btn-row">
       <button class="btn-execute" onclick="sendCode()">▶️ Execute</button>
-      <button class="btn-print" onclick="sendPrint()">🖨️ Print</button>
-      <button class="btn-all" onclick="sendAll()">📢 All</button>
-      <button class="btn-kick" onclick="sendKick()">👢 Kick</button>
     </div>
 
     <div class="footer">🔌 Connect your Roblox script to the URL above</div>
@@ -295,13 +356,19 @@ export class ZLFinderDO {
         }
         list.innerHTML = data.map(p => \`
           <div class="player">
-            <span>👤 \${p.name} \${p.isOwner ? '👑' : ''} 🆔 \${p.userId} ⚡ \${p.executor}</span>
+            <div class="info">
+              <span class="name">👤 \${p.name}</span>
+              \${p.isOwner ? '<span class="owner-badge">👑</span>' : ''}
+              <span class="id">🆔 \${p.userId}</span>
+              <span class="executor">⚡ \${p.executor}</span>
+            </div>
             <button class="kick-btn" onclick="kickPlayer('\${p.name}')">Kick</button>
           </div>
         \`).join('');
       } catch(e) { console.error('Fetch error:', e); }
     }
 
+    // ─── KICK PLAYER ───
     async function kickPlayer(name) {
       if (!confirm(\`Kick player: \${name}?\`)) return;
       const password = prompt('Enter password:');
@@ -321,48 +388,20 @@ export class ZLFinderDO {
       }
     }
 
+    // ─── SEND CODE ───
     async function sendCode() {
       const code = document.getElementById('codeInput').value;
       if (!code) { showToast('❌ Enter code!', 'error'); return; }
       const password = prompt('Enter password:');
       if (!password) return;
       try {
-        const res = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, password }) });
+        const res = await fetch('/api/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, password })
+        });
         const data = await res.json();
         showToast(data.message, res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error', 'error'); }
-    }
-
-    async function sendPrint() {
-      const password = prompt('Enter password:');
-      if (!password) return;
-      try {
-        const res = await fetch('/api/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-        const data = await res.json();
-        showToast(data.message, res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error', 'error'); }
-    }
-
-    async function sendAll() {
-      const password = prompt('Enter password:');
-      if (!password) return;
-      try {
-        const res = await fetch('/api/all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-        const data = await res.json();
-        showToast(data.message, res.ok ? 'success' : 'error');
-      } catch(e) { showToast('❌ Error', 'error'); }
-    }
-
-    async function sendKick() {
-      const name = prompt('Enter player name:');
-      if (!name) return;
-      const password = prompt('Enter password:');
-      if (!password) return;
-      try {
-        const res = await fetch('/api/kick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: name, password: password }) });
-        const data = await res.json();
-        showToast(data.message, res.ok ? 'success' : 'error');
-        fetchPlayers();
       } catch(e) { showToast('❌ Error', 'error'); }
     }
 
@@ -392,8 +431,6 @@ export class ZLFinderDO {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    // ─── Route all requests to the Durable Object ───
     const id = env.ZLFINDER.idFromName('zlfinder');
     const stub = env.ZLFINDER.get(id);
     return stub.fetch(request);
